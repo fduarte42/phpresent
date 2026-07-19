@@ -1,0 +1,70 @@
+{
+    "name": "phpresent/phpresent",
+    "description": "Church presentation application synchronized with SongbookPro Groups",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "^8.3",
+        "mezzio/mezzio": "^3.19",
+        "mezzio/mezzio-fastroute": "^3.10",
+        "mezzio/mezzio-helpers": "^5.16",
+        "mezzio/mezzio-problem-details": "^1.10",
+        "laminas/laminas-servicemanager": "^3.22",
+        "laminas/laminas-config-aggregator": "^1.15",
+        "laminas/laminas-diactoros": "^3.5",
+        "doctrine/orm": "^3.3",
+        "doctrine/dbal": "^4.2",
+        "doctrine/migrations": "^3.8",
+        "doctrine/doctrine-laminas-hydrator": "^3.3",
+        "symfony/cache": "^7.2",
+        "symfony/messenger": "^7.2",
+        "symfony/serializer": "^7.2",
+        "symfony/validator": "^7.2",
+        "symfony/property-access": "^7.2",
+        "symfony/console": "^7.2",
+        "league/flysystem": "^3.29",
+        "monolog/monolog": "^3.8",
+        "ramsey/uuid": "^4.7",
+        "ramsey/uuid-doctrine": "^2.1",
+        "firebase/php-jwt": "^7.0",
+        "guzzlehttp/guzzle": "^7.9"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.5",
+        "pestphp/pest": "^3.7",
+        "phpstan/phpstan": "^1.12",
+        "phpstan/phpstan-doctrine": "^1.5",
+        "phpstan/phpstan-strict-rules": "^1.6",
+        "friendsofphp/php-cs-fixer": "^3.68",
+        "roave/security-advisories": "dev-latest"
+    },
+    "autoload": {
+        "psr-4": {
+            "Phpresent\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "PhpresentTest\\": "test/"
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "test:unit": "pest --group=unit",
+        "test:integration": "pest --group=integration",
+        "stan": "phpstan analyse -c phpstan.neon",
+        "cs-check": "php-cs-fixer fix --dry-run --diff",
+        "cs-fix": "php-cs-fixer fix",
+        "serve": "php -S 0.0.0.0:8080 -t public public/index.php",
+        "migrate": "doctrine-migrations migrate --no-interaction",
+        "sync:songs": "php bin/console.php songbookpro:sync-songs"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

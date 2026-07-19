@@ -1,0 +1,75 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      APP_ENV: development
+      DATABASE_URL: "sqlite:///data/phpresent.sqlite"
+      CACHE_DSN: "redis://cache:6379"
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    depends_on:
+      - cache
+    command: ["php", "-S", "0.0.0.0:8080", "-t", "public", "public/index.php"]
+
+  websocket:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: development
+      DATABASE_URL: "sqlite:///data/phpresent.sqlite"
+      CACHE_DSN: "redis://cache:6379"
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    depends_on:
+      - cache
+    command: ["php", "bin/websocket-server.php"]
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+    command: ["sh", "-c", "npm install && npm run dev -- --host"]
+
+  cache:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  mariadb:
+    image: mariadb:11
+    profiles: ["mariadb"]
+    environment:
+      MARIADB_DATABASE: phpresent
+      MARIADB_USER: phpresent
+      MARIADB_PASSWORD: phpresent
+      MARIADB_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: phpresent
+      POSTGRES_USER: phpresent
+      POSTGRES_PASSWORD: phpresent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  mariadb_data:
+  postgres_data:
