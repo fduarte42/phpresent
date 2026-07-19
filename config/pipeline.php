@@ -14,6 +14,9 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
     $app->pipe(Mezzio\Router\Middleware\MethodNotAllowedMiddleware::class);
     $app->pipe(Mezzio\Helper\UrlHelperMiddleware::class);
     $app->pipe(Mezzio\ProblemDetails\ProblemDetailsMiddleware::class);
+    $app->pipe(Mezzio\Helper\BodyParams\BodyParamsMiddleware::class);
+    $app->pipe(Mezzio\Session\SessionMiddleware::class);
+    $app->pipe(Phpresent\Identity\Presentation\Http\Middleware\AuthenticationMiddleware::class);
     $app->pipe(Mezzio\Router\Middleware\DispatchMiddleware::class);
     $app->pipe(Mezzio\Handler\NotFoundHandler::class);
 };

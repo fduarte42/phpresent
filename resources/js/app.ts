@@ -1,11 +1,11 @@
 import { createApp, h, type Component, type DefineComponent } from 'vue';
 import { createInertiaApp } from '@inertiajs/vue3';
 import { createPinia } from 'pinia';
-import { create, NButton, NCard, NConfigProvider, NDataTable, NInput, NSpace, darkTheme } from 'naive-ui';
+import { create, NButton, NCard, NConfigProvider, NDataTable, NInput, NSpace, NTag, darkTheme } from 'naive-ui';
 import AppLayout from './Layouts/AppLayout.vue';
 
 const naive = create({
-    components: [NButton, NCard, NConfigProvider, NDataTable, NInput, NSpace],
+    components: [NButton, NCard, NConfigProvider, NDataTable, NInput, NSpace, NTag],
 });
 
 interface PageModule {

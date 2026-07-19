@@ -49,7 +49,7 @@ final class Version20260719120000 extends AbstractMigration
         $sections->setPrimaryKey(['id']);
         $sections->addUniqueIndex(['song_id', 'position'], 'uniq_song_position');
         $sections->addIndex(['song_id'], 'idx_song_sections_song_id');
-        $sections->addForeignKeyConstraint($songs, ['song_id'], ['id'], ['onDelete' => 'CASCADE']);
+        $sections->addForeignKeyConstraint($songs->getName(), ['song_id'], ['id'], ['onDelete' => 'CASCADE']);
 
         $syncState = $schema->createTable('sync_state');
         $syncState->addColumn('entity_type', 'string', ['length' => 64]);

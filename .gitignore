@@ -13,6 +13,8 @@
 config/autoload/*.local.php
 .phpunit.result.cache
 .pest.result.cache
+/.phpunit.cache/
 /coverage/
 *.log
 .DS_Store
+.idea/

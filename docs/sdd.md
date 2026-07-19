@@ -338,9 +338,25 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   Doctrine implementation, DTOs, sync Command/Handler, SongbookPro GraphQL
   client (pagination/retry/ETag/rate-limit), REST endpoints, migration,
   Inertia/Vue list page, unit + integration tests
-- ⏳ SongSet module (sets, ordering, local drag/drop override, notes,
-  transposition passthrough)
-- ⏳ Identity module (users, roles, RBAC, session + JWT auth, audit log)
+- ✅ SongSet module: Domain entities/value objects (`SongSet`, `SongSetItem`,
+  merge-on-sync with local reorder preservation), repository interface +
+  Doctrine implementation, DTOs, sync Command/Handler, reorder Command/
+  Handler, SongbookPro GraphQL client (new `songSets` query + mapper reusing
+  shared transport/retry/ETag/rate-limit infra), REST endpoints incl. local
+  reorder, migration, Inertia/Vue list + drag/drop show page (first use of
+  SortableJS), unit + integration tests. Also promoted `SyncState`/
+  `SyncStateRepositoryInterface` from the Song module to `Shared` so both
+  modules share one sync-state table without a cross-module Domain
+  dependency (see §16.1/§16.2 history — no SDD section needed for this, it's
+  an internal refactor, not new surface area).
+- ✅ Identity module: `User`/`Role` entities (role membership as a JSON
+  array of role ids, no join table — see §18.1), repository interfaces +
+  Doctrine implementations, `PasswordHasherInterface`, session (
+  `mezzio/mezzio-session`+`-ext`) + JWT (`firebase/php-jwt`) composite
+  `AuthenticatorInterface`, `PermissionInterface`/`AuditLoggerInterface`
+  promoted to `Shared\Domain` for cross-module reuse, REST endpoints incl.
+  login/logout, migration, unit + integration tests. No admin UI yet
+  (tracked separately below).
 - ⏳ Presentation engine (displays, slide composer, live control, WebSocket
   server, SSE fallback)
 - ⏳ Media module (Flysystem-backed assets, video/image/PDF slides)
@@ -394,13 +410,14 @@ by design, so wiring stays discoverable in one place.
 
 `src/Shared/Infrastructure/Persistence/EntityManagerFactory.php` passes an
 explicit `paths` array to `ORMSetup::createAttributeMetadataConfiguration()`
-— currently `Song/Domain/Entity` and `Song/Infrastructure/Persistence`.
-Doctrine will silently ignore entities outside these paths (no error, the
-table just never gets created/mapped). **Every new module that adds
-`#[ORM\Entity]` classes must add its own entity directory to this array**,
-and add the corresponding path list to any test that builds its own
-`EntityManager` (see 16.4) and to `cli-config.php`'s indirect dependency on
-the same factory.
+— currently its own directory (for the shared `SyncState` entity),
+`Song/Domain/Entity`, `Song/Infrastructure/Persistence`, and
+`SongSet/Domain/Entity`. Doctrine will silently ignore entities outside
+these paths (no error, the table just never gets created/mapped). **Every
+new module that adds `#[ORM\Entity]` classes must add its own entity
+directory to this array**, and add the corresponding path list to any test
+that builds its own `EntityManager` (see 16.4) and to `cli-config.php`'s
+indirect dependency on the same factory.
 
 ### 16.3 Inertia adapter is hand-rolled, not a package
 
@@ -445,6 +462,25 @@ version's output path before "fixing" it back.
   suite — keep names unique across files, or move a helper into
   `test/Support/` as a real class if it's going to be reused from more than
   one test file.
+- Every throwaway in-memory `EntityManager` built by an integration test
+  must call `EntityManagerFactory::registerCustomTypes()` before
+  `ORMSetup::createAttributeMetadataConfiguration()` — Doctrine has no
+  autodiscovery for the `uuid` DBAL type (`ramsey/uuid-doctrine`) used by
+  every entity's `id` column, and building an `EntityManager` without
+  registering it first fails with `UnknownColumnType` at schema-creation
+  time, not at mapping time, which makes the real cause easy to misdiagnose.
+  See `test/Integration/Song/DoctrineSongRepositoryTest.php` and
+  `test/Integration/SongSet/DoctrineSongSetRepositoryTest.php` for the
+  one-line call site.
+- `DriverManager::getConnection()` no longer parses a raw `'url' => $dsn`
+  array key in Doctrine DBAL 4.4+ (this changed after §16.5/§16.6 were
+  written, when this project's pinned `^4.2` constraint still resolved to a
+  version where it worked) — pass the DSN through
+  `(new Doctrine\DBAL\Tools\DsnParser($schemeMapping))->parse($dsn)` first.
+  `EntityManagerFactory` maps the `sqlite`/`mysql`/`postgres` URL schemes
+  used in `config/autoload/local.php.dist` to their `pdo_*` driver names;
+  any test building its own connection needs the same scheme mapping (at
+  minimum `['sqlite' => 'pdo_sqlite']`).
 
 ### 16.5 PHP version target vs. what's actually installed
 
@@ -471,7 +507,59 @@ and prefer running `composer install` in CI or a normal environment. `npm
 install` / `vue-tsc --noEmit` / `vite build` all worked without issue in
 that same sandbox, so the frontend toolchain is not affected by this.
 
-### 16.7 What to update alongside a new module
+### 16.7 This app had never actually been booted before the SongSet increment
+
+The Song increment was built and unit/integration tested in a sandbox that
+could not run `composer install` (see 16.6), so `config/container.php`,
+`config/pipeline.php`, and the migrations had never actually been exercised
+end-to-end. Building and manually verifying the SongSet increment (REST
+endpoints, Inertia pages, drag/drop reorder) in an environment that *could*
+install dependencies and boot a real server surfaced several latent bugs
+that were fixed as part of this increment, all pre-existing and unrelated
+to SongSet's own design:
+
+- `config/container.php` referenced `ConfigAggregator\ArrayProvider` where
+  the `use Laminas\ConfigAggregator\ConfigAggregator;` import doesn't cover
+  the implied sub-namespace — fixed to `use ...\ArrayProvider;` directly.
+  It also passed `local.php`/`local.php.dist` as `ConfigAggregator`'s third
+  constructor argument (`$postProcessors`, which expects callables/class
+  strings), when it needed to be a fourth `ArrayProvider` in the providers
+  list like the other config files.
+- `config/container.php` was missing `Laminas\Diactoros\ConfigProvider`,
+  so no PSR-17 factories were registered — Mezzio's router middleware
+  failed with `MissingDependencyException` on every request.
+- `config/pipeline.php` had no `Mezzio\Helper\BodyParams\BodyParamsMiddleware`,
+  so `$request->getParsedBody()` was always empty for JSON request bodies —
+  `POST /api/songsets/sync`, `POST /api/songs/sync`, and
+  `POST /api/songsets/{id}/reorder` all silently no-op'd instead of reading
+  their JSON body. This is the kind of bug unit tests (which call handlers
+  directly, bypassing HTTP body parsing entirely) cannot catch — only
+  exercising the real HTTP endpoint surfaces it.
+- `src/Shared/Infrastructure/Persistence/EntityManagerFactory.php` passed
+  `['url' => $dsn]` straight to `DriverManager::getConnection()`; DBAL 4.4+
+  no longer parses a raw `url` key there (see the DsnParser note in 16.4) —
+  affects every DB connection the app makes, not just tests.
+- Doctrine's `uuid` DBAL type was never registered anywhere (see the
+  `EntityManagerFactory::registerCustomTypes()` note in 16.4) — every
+  entity uses it for its `id` column, so this blocked all persistence.
+- `migrations/Version20260719120000.php`'s
+  `$sections->addForeignKeyConstraint($songs, ...)` passed a `Table` object
+  where current DBAL expects the foreign table's *name* (`string`) — fixed
+  to `$songs->getName()`; the SongSet migration was written matching the
+  same (incorrect) pattern and fixed identically before either had run.
+- `public/index.php` had no static-file passthrough for PHP's built-in
+  dev server (`composer serve`), so requests for built Vite assets under
+  `/build/*` were routed into the Mezzio pipeline instead of being served
+  as files, which doesn't happen in production behind a real webserver
+  but breaks `composer serve` immediately.
+
+None of this reflects a problem with the *design* documented elsewhere in
+this file — it's what "the app was designed correctly on paper but never
+run" looks like. If a future increment hits a wall that "should just
+work" per the SDD, check whether that code path has actually been
+exercised yet before assuming the increment you're adding is at fault.
+
+### 16.8 What to update alongside a new module
 
 When adding a module (e.g. SongSet), the checklist is: entities +
 migration (16.2), repository interface + Doctrine implementation, DI
@@ -479,3 +567,398 @@ wiring (16.1), routes in `config/routes.php`, an SDD section (schema,
 entities, DTOs, endpoints — following the style of §4–§11) added *before*
 the code per the project's delivery convention, `test/Support/` fakes for
 any new interfaces (16.4), and a roadmap line moved from ⏳ to ✅ in §15.
+
+## 17. SongSet Module (second increment)
+
+Mirrors the Song module's shape (§4–§11) exactly, per §16.8 — same layering,
+same sync strategy, same DTO/repository/handler patterns. Only the
+differences worth calling out are noted below.
+
+### 17.1 Domain Model
+
+```
+SongSet (aggregate root)
+ ├─ id: SongSetId (UUIDv4)
+ ├─ externalId: SongbookProId          // SongbookPro's own set ID — sync key
+ ├─ name: string
+ ├─ serviceDate: ?DateTimeImmutable    // SongbookPro's scheduled date, if any
+ ├─ notes: ?string
+ ├─ items: SongSetItem[]               // ordered, see below
+ ├─ syncedAt: DateTimeImmutable
+ ├─ sourceRevision: string
+ └─ sourceChecksum: string
+
+SongSetItem (entity, owned by SongSet)
+ ├─ id
+ ├─ songExternalId: string             // references a Song by its SongbookPro
+ │                                     // id — NOT a Doctrine relation to the
+ │                                     // Song entity. SongSet and Song are
+ │                                     // separate aggregates in separate
+ │                                     // modules; Domain must not depend on
+ │                                     // another module's entities. Resolving
+ │                                     // the referenced Song (title, key, ...)
+ │                                     // for display is an Application-layer
+ │                                     // concern (SongRepositoryInterface
+ │                                     // lookup when building the DTO).
+ ├─ sourcePosition: int                // exact SongbookPro order — never
+ │                                     // recomputed, same invariant as
+ │                                     // SongSection::position in §4.
+ ├─ localPosition: ?int                // local-only reorder override; null
+ │                                     // means "follow sourcePosition".
+ │                                     // Never sent back to SongbookPro.
+ ├─ transposedKey: ?MusicalKey         // passthrough value already computed
+ │                                     // by SongbookPro — Phpresent never
+ │                                     // recalculates a transposition.
+ └─ notes: ?string
+```
+
+Design decisions:
+
+- **Two orderings, one source of truth.** `SongSetItem::sourcePosition` is
+  the SongbookPro-assigned order and is sync-owned, exactly like
+  `SongSection::position`. `localPosition` is a purely local override the
+  operator can set (drag/drop in the UI) without mutating SongbookPro.
+  `SongSet::items()` returns items ordered by `effectivePosition()` —
+  `localPosition ?? sourcePosition` — computed per item, never persisted as
+  a derived column.
+- **Reorder is a separate command from sync**, and touches only
+  `localPosition`. `ReorderSongSetItemsCommand` never calls the SongbookPro
+  client and is not gated by `hasDiverged()` — it's local display state, not
+  synced content, consistent with the module description in §2 ("local
+  display overrides ... purely local reorder does not mutate the source of
+  truth").
+- **A full sync pass resets `localPosition` to `null`** for any item whose
+  `sourcePosition` changed upstream (the local override is assumed stale
+  once the set's real order changes), but leaves it untouched for items
+  whose `sourcePosition` is unchanged. This is decided in
+  `SongSet::applySync()`, mirroring how `Song::applySync()` owns its own
+  field-update rules.
+- **`transposedKey` is passthrough, not computed.** SongbookPro already
+  resolves per-set transposition; Phpresent stores and displays it exactly
+  as received, same principle as `Song::defaultKey`.
+- **No Doctrine relation between `SongSetItem` and `Song`.** Keeping the
+  reference as a plain `songExternalId` string (rather than an ORM
+  `ManyToOne` to `Song`) keeps the two modules' Domain layers decoupled — a
+  cross-module Doctrine association would force `SongSet`'s entity mapping
+  to depend on `Song`'s, violating the "modules are independently testable"
+  rule in §2.
+
+### 17.2 Application Layer
+
+- `SyncSongSetsCommand` / `SyncSongSetsHandler` — identical shape to
+  `SyncSongsCommand`/`SyncSongsHandler` (§5): pulls via
+  `SongSetSourceInterface`, upserts through `SongSetRepositoryInterface`,
+  uses the **same shared `sync_state` table** (§4/§16) keyed by entity type
+  `'song_set'` — no new sync-state table or entity.
+- `ReorderSongSetItemsCommand(string $songSetId, array $orderedItemIds)` /
+  `ReorderSongSetItemsHandler` — loads the set, calls
+  `SongSet::reorder(array $orderedItemIds)` (assigns `localPosition`
+  sequentially from the given id order, throws
+  `UnknownSongSetItemException` if an id doesn't belong to the set), saves.
+- `GetSongSetQuery` / `GetSongSetHandler` — id lookup, resolves each item's
+  `songExternalId` against `SongRepositoryInterface::findByExternalId()` to
+  populate `SongSetItemDto::songTitle`/`songDefaultKey` for display; a
+  missing/unsynced Song leaves those fields `null` rather than failing the
+  whole set (a set can legitimately reference a song not yet synced).
+- `SearchSongSetsQuery` / `SearchSongSetsHandler` — same
+  `search()`/`all()` split as `SearchSongsHandler` (§5), delegated to
+  `SongSetRepositoryInterface`.
+- `SongSetSourceInterface::fetchAll(?string $updatedSince = null): iterable<RemoteSongSetRecord>`
+  — same port shape as `SongSourceInterface` (§5).
+- DTOs (`SongSetDto`, `SongSetItemDto`) are the only shape crossing into
+  Presentation, same rule as §5.
+
+### 17.3 SongbookPro GraphQL Integration
+
+Reuses the shared `GraphQLClientInterface`/`SongbookProGraphQLClient`
+infrastructure from §6 as-is (pagination, retry, ETag, rate-limit,
+incremental sync) — only a new query string and a new
+`SongSetGraphQLMapper` are added, in `src/SongSet/Infrastructure/SongbookPro`
+and `src/SongSet/Infrastructure/Mapper` respectively, following the same
+`songSets` connection shape as the `songs` connection in §6:
+
+```graphql
+query SongSets($after: String, $updatedSince: String, $first: Int!) {
+  songSets(after: $after, updatedSince: $updatedSince, first: $first) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id
+        name
+        serviceDate
+        notes
+        revision
+        checksum
+        items { songId position transposedKey notes }
+      }
+    }
+  }
+}
+```
+
+### 17.4 Database Schema
+
+```sql
+CREATE TABLE song_sets (
+    id                CHAR(36) PRIMARY KEY,
+    external_id       VARCHAR(191) NOT NULL UNIQUE,
+    name              VARCHAR(512) NOT NULL,
+    service_date      DATETIME,
+    notes             TEXT,
+    source_revision   VARCHAR(191) NOT NULL,
+    source_checksum   VARCHAR(191) NOT NULL,
+    synced_at         DATETIME NOT NULL,
+    created_at        DATETIME NOT NULL,
+    updated_at        DATETIME NOT NULL
+);
+
+CREATE TABLE song_set_items (
+    id                CHAR(36) PRIMARY KEY,
+    song_set_id       CHAR(36) NOT NULL REFERENCES song_sets(id) ON DELETE CASCADE,
+    song_external_id  VARCHAR(191) NOT NULL,
+    source_position   INTEGER NOT NULL,
+    local_position    INTEGER,
+    transposed_key    VARCHAR(8),
+    notes             TEXT,
+    UNIQUE (song_set_id, source_position)
+);
+CREATE INDEX idx_song_set_items_song_set_id ON song_set_items(song_set_id);
+CREATE INDEX idx_song_sets_name ON song_sets(name);
+```
+
+No new `sync_state` table — the migration reuses the one created by the
+Song module's migration (§9/§16); `entity_type = 'song_set'` rows are
+inserted into the existing table at runtime, not by a migration.
+
+### 17.5 REST API
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/songsets` | paginated list + full-text search (`?q=`) |
+| GET | `/api/songsets/{id}` | single set with ordered, song-resolved items |
+| POST | `/api/songsets/sync` | trigger a foreground sync pass (admin-only) |
+| POST | `/api/songsets/{id}/reorder` | persist a local drag/drop item order (`{itemIds: string[]}`) — local-only, never touches SongbookPro |
+
+Same conventions as §10: JSON responses, RFC 7807 problem details for
+errors.
+
+### 17.6 Frontend
+
+- `resources/js/Pages/SongSets/Index.vue` — Naive UI `n-data-table` list of
+  synced sets (name, service date, item count), same shape as
+  `Songs/Index.vue` (§11).
+- `resources/js/Pages/SongSets/Show.vue` — ordered item list rendered with
+  SortableJS for drag/drop; on drop, posts the new id order to
+  `/api/songsets/{id}/reorder` and optimistically updates local state. This
+  is the first and only current use of SortableJS (listed in §3) in the
+  codebase.
+- `resources/js/stores/useSongSetsStore.ts` — Pinia store mirroring
+  `useSongsStore.ts` (§11), plus a `reorder()` action.
+
+## 18. Identity Module (third increment)
+
+Users, roles, RBAC, session + JWT auth, and an append-only audit log, per
+§2/§8. Unlike Song/SongSet, Identity has no external source of truth to
+sync from — it's the first module whose data model is authored locally.
+
+### 18.1 Domain Model
+
+```
+User (aggregate root)
+ ├─ id: UserId (UUIDv4)
+ ├─ email: Email                       // VO, validated, unique
+ ├─ passwordHash: string               // never a raw password past the boundary
+ ├─ displayName: string
+ ├─ roleIds: string[]                  // Role UUIDs, JSON column
+ ├─ isActive: bool
+ ├─ createdAt: DateTimeImmutable
+ └─ updatedAt: DateTimeImmutable
+
+Role (aggregate root — not owned by User)
+ ├─ id: RoleId (UUIDv4)
+ ├─ name: string                       // unique, e.g. "admin", "operator"
+ └─ permissions: string[]              // e.g. ["users.manage", "songs.sync"]
+```
+
+Design decisions:
+
+- **Role membership is a JSON array of role IDs on `User`, not a
+  many-to-many join table.** Mirrors the JSON-array pattern already used
+  for `Song::tags` (§4) — a handful of roles per install, no query pattern
+  yet needs "find all users with role X" at the SQL level. If that need
+  shows up, promote to a join table then; adding it speculatively now would
+  be exactly the "design for hypothetical future requirements" this
+  project avoids.
+- **Roles are a separate aggregate, not nested under User.** Many users
+  share one role, and role/permission definitions are managed
+  independently of any single user — the textbook RBAC shape.
+- **Permissions are a plain `string[]` on `Role`, not a normalized
+  `permissions` table.** Supersedes the placeholder `permissions` table
+  name listed in §9's "later increments" note, written before this
+  design existed. Nothing yet needs permission metadata (descriptions,
+  grouping) or a query across roles by permission — YAGNI applies the same
+  way it did to Role↔User above.
+- **Password hashing goes through `PasswordHasherInterface`**
+  (`hash(string $password): string`, `verify(string $password, string $hash): bool`),
+  a Domain-facing port implemented by `PhpPasswordHasher` (wraps
+  `password_hash`/`password_verify`, per §8). Keeping it an interface — not
+  calling the PHP functions directly from the User entity or a handler —
+  means tests never touch real bcrypt, and a future algorithm change is an
+  Infrastructure-only swap.
+- **No self-registration.** This is an internal church/band team tool, not
+  a public SaaS; `CreateUserCommand` is admin-only, enforced by the
+  `PermissionInterface` gate inside the handler (see 18.2), not by a
+  missing "sign up" route.
+
+### 18.2 Application Layer
+
+Two new **Shared** ports (used by every module's Application handlers
+going forward, not just Identity's own — same reasoning that moved
+`SyncStateRepositoryInterface` to `Shared` in the SongSet increment, §16):
+
+- `Shared\Domain\Security\PermissionInterface` —
+  `can(string $actorUserId, string $permission): bool`. Takes a plain
+  actor-id string rather than a `User` entity so modules outside Identity
+  can depend on this port without depending on Identity's Domain layer.
+  Implemented by `Identity\Infrastructure\Security\RolePermissionChecker`
+  (loads the actor's `User` via `UserRepositoryInterface`, resolves their
+  `roleIds` to `Role`s via `RoleRepositoryInterface`, checks the union of
+  permissions).
+- `Shared\Domain\Audit\AuditLoggerInterface` —
+  `record(string $actorUserId, string $action, array $context = []): void`.
+  Implemented by `DoctrineAuditLogger` in
+  `Shared\Infrastructure\Persistence` (same directory as the shared
+  `SyncState` entity — both are cross-cutting infra with no module-specific
+  coupling) writing to the append-only `audit_log` table.
+
+Every mutating Identity command takes `actorUserId` as its first
+parameter, checks `PermissionInterface::can()` before doing anything else,
+throws `PermissionDeniedException` (Domain) if denied, and calls
+`AuditLoggerInterface::record()` after a successful write — same shape as
+`SyncSongsHandler`'s create/update branching, just gated and logged:
+
+- `CreateUserCommand(actorUserId, email, password, displayName, roleIds)` /
+  `CreateUserHandler` — gate: `users.manage`. Hashes the password via
+  `PasswordHasherInterface`; never logs or stores the raw value.
+- `AssignRoleCommand(actorUserId, userId, roleId)` / `AssignRoleHandler` —
+  gate: `users.manage`.
+- `DeactivateUserCommand(actorUserId, userId)` / `DeactivateUserHandler` —
+  gate: `users.manage`. Soft-disable (`isActive = false`), never a hard
+  delete — consistent with "prefer reversible operations" project-wide.
+- `CreateRoleCommand(actorUserId, name, permissions)` / `CreateRoleHandler`
+  — gate: `roles.manage`.
+- `ListUsersQuery` / `GetUserQuery` / `ListRolesQuery` + Handlers — gate:
+  `users.view` / `roles.view` respectively. Reads are gated too, since
+  user records (email, role membership) are the one place in this app
+  where "logged in" isn't enough on its own — per §8's cross-cutting
+  security note, checked in the Application handler, not the route.
+- `LoginCommand(email, password)` / `LoginHandler` — **not** gated (this
+  command *is* the gate): looks up by email via `UserRepositoryInterface`,
+  verifies via `PasswordHasherInterface::verify()`, throws
+  `InvalidCredentialsException` on any failure (wrong email or wrong
+  password get the identical exception/message — never reveal which one
+  was wrong), returns `UserDto` on success. The Presentation login handler
+  writes the returned user id into the session; `LoginHandler` itself
+  never touches HTTP session state, keeping it framework-free and unit
+  testable like every other Application handler.
+- Logout has no Application handler — it's pure session-clearing, entirely
+  a Presentation concern (§18.4).
+
+`AuthenticatorInterface` (`Identity\Application\Service`, mirrors
+`SongSourceInterface`'s placement) —
+`authenticate(ServerRequestInterface $request): ?string` (returns the
+authenticated user id, or null). Takes a PSR-7 request the same way
+existing handlers already take `Psr\Log\LoggerInterface` — a
+language-level PSR contract, not a framework/Infrastructure dependency, so
+this stays consistent with "Application depends only on Domain interfaces
+... never on Infrastructure or Presentation" (§2: PSR interfaces are the
+one standing exception, already established by `LoggerInterface` usage in
+`SyncSongsHandler`). Three Infrastructure implementations composed by DI,
+matching §8's "session first, bearer JWT fallback for `/api/*`":
+
+- `SessionAuthenticator` — reads the `session` request attribute (set by
+  `Mezzio\Session\SessionMiddleware`, piped ahead of routing, §18.4),
+  returns `$session->get('userId')`.
+- `JwtAuthenticator` — reads the `Authorization: Bearer <token>` header,
+  verifies via `firebase/php-jwt`'s `JWT::decode()` against a
+  config-supplied secret, returns the `sub` claim; returns `null` (never
+  throws past its own boundary) on any decode/signature/expiry failure.
+- `CompositeAuthenticator` — tries `SessionAuthenticator` first always;
+  falls back to `JwtAuthenticator` only when the request path starts with
+  `/api/`. This is the service actually bound to `AuthenticatorInterface`
+  in DI.
+
+### 18.3 Database Schema
+
+```sql
+CREATE TABLE users (
+    id                CHAR(36) PRIMARY KEY,
+    email             VARCHAR(320) NOT NULL UNIQUE,
+    password_hash     VARCHAR(255) NOT NULL,
+    display_name      VARCHAR(191) NOT NULL,
+    role_ids          TEXT NOT NULL,            -- JSON array of role UUIDs
+    is_active         BOOLEAN NOT NULL DEFAULT 1,
+    created_at        DATETIME NOT NULL,
+    updated_at        DATETIME NOT NULL
+);
+CREATE INDEX idx_users_email ON users(email);
+
+CREATE TABLE roles (
+    id                CHAR(36) PRIMARY KEY,
+    name              VARCHAR(64) NOT NULL UNIQUE,
+    permissions       TEXT NOT NULL             -- JSON array of permission strings
+);
+
+CREATE TABLE audit_log (
+    id                CHAR(36) PRIMARY KEY,
+    actor_user_id     CHAR(36) NOT NULL,
+    action            VARCHAR(191) NOT NULL,
+    context           TEXT NOT NULL,            -- JSON object, free-form
+    recorded_at       DATETIME NOT NULL
+);
+CREATE INDEX idx_audit_log_actor_user_id ON audit_log(actor_user_id);
+CREATE INDEX idx_audit_log_recorded_at ON audit_log(recorded_at);
+```
+
+`audit_log` is append-only by convention (no repository method updates or
+deletes rows, per §8) — enforced by code review, not a DB trigger, same
+trust level as the rest of this codebase's other invariants (e.g.
+`SongSection::position` immutability, §4).
+
+### 18.4 Presentation & Middleware
+
+- `Mezzio\Session\SessionMiddleware` (ext-session persistence via
+  `mezzio/mezzio-session-ext`) is piped immediately after routing
+  middleware and before `AuthenticationMiddleware`, so every request has a
+  `session` attribute available.
+- `Phpresent\Identity\Presentation\Http\Middleware\AuthenticationMiddleware`
+  (PSR-15) calls `AuthenticatorInterface::authenticate()` and attaches the
+  result (a `?string` user id, possibly null for anonymous requests) as
+  the `actorUserId` request attribute. It never rejects a request itself
+  — "is this user allowed to do X" is answered by `PermissionInterface`
+  inside the Application handler (§18.2/§8), not by middleware. Anonymous
+  requests reach handlers with `actorUserId = null`; handlers that require
+  auth treat `null` the same as "no permissions" (`PermissionInterface`
+  returns `false` for a null/unknown actor).
+- REST handlers catch `PermissionDeniedException` →
+  `JsonResponse(['title' => 'Forbidden', 'status' => 403], 403)` and
+  `InvalidCredentialsException` →
+  `JsonResponse(['title' => 'Invalid credentials', 'status' => 401], 401)`,
+  matching the existing explicit-catch pattern (`GetSongHandler`'s 404,
+  §10) rather than introducing a new generic exception-to-response mapper.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/login` | authenticate, write `userId` into the session |
+| POST | `/logout` | clear the session |
+| GET | `/api/users` | list users (gate: `users.view`) |
+| GET | `/api/users/{id}` | get one user (gate: `users.view`) |
+| POST | `/api/users` | create a user (gate: `users.manage`) |
+| POST | `/api/users/{id}/roles` | assign a role (gate: `users.manage`) |
+| POST | `/api/users/{id}/deactivate` | soft-disable a user (gate: `users.manage`) |
+| GET | `/api/roles` | list roles (gate: `roles.view`) |
+| POST | `/api/roles` | create a role (gate: `roles.manage`) |
+
+No Vue/Inertia pages in this increment — a dedicated Users/Roles admin UI
+is its own later roadmap line ("Admin UI", §15), built once more modules
+have permissions worth managing through a UI rather than direct API calls.

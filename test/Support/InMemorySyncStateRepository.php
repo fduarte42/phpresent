@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace PhpresentTest\Support;
 
 use DateTimeImmutable;
-use Phpresent\Song\Domain\Repository\SyncStateRepositoryInterface;
+use Phpresent\Shared\Domain\Repository\SyncStateRepositoryInterface;
 
 final class InMemorySyncStateRepository implements SyncStateRepositoryInterface
 {

@@ -80,7 +80,6 @@ final class SongGraphQLMapper
     }
 
     /**
-     * @param mixed $value
      * @return string[]
      */
     private function stringList(mixed $value): array

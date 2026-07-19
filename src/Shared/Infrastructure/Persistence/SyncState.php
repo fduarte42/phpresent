@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phpresent\Song\Infrastructure\Persistence;
+namespace Phpresent\Shared\Infrastructure\Persistence;
 
 use DateTimeImmutable;
 use Doctrine\ORM\Mapping as ORM;

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phpresent\Song\Domain\Repository;
+namespace Phpresent\Shared\Domain\Repository;
 
 use DateTimeImmutable;
 

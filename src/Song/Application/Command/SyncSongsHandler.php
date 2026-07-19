@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phpresent\Song\Application\Command;
 
 use DateTimeImmutable;
+use Phpresent\Shared\Domain\Repository\SyncStateRepositoryInterface;
 use Phpresent\Song\Application\DTO\RemoteSongRecord;
 use Phpresent\Song\Application\Service\SongSourceInterface;
 use Phpresent\Song\Domain\Entity\Song;
@@ -12,7 +13,6 @@ use Phpresent\Song\Domain\Entity\SongSection;
 use Phpresent\Song\Domain\Exception\InvalidCcliNumberException;
 use Phpresent\Song\Domain\Exception\InvalidMusicalKeyException;
 use Phpresent\Song\Domain\Repository\SongRepositoryInterface;
-use Phpresent\Song\Domain\Repository\SyncStateRepositoryInterface;
 use Phpresent\Song\Domain\ValueObject\CcliNumber;
 use Phpresent\Song\Domain\ValueObject\MusicalKey;
 use Psr\Log\LoggerInterface;

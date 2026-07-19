@@ -17,4 +17,11 @@ return [
         'sync_interval_seconds' => (int) (getenv('SONGBOOKPRO_SYNC_INTERVAL_SECONDS') ?: 300),
         'rate_limit_per_second' => (int) (getenv('SONGBOOKPRO_RATE_LIMIT_PER_SECOND') ?: 5),
     ],
+    'identity' => [
+        // Only signs/verifies JWT bearer tokens for /api/* requests (session
+        // auth is the default, see docs/sdd.md §18.2) — generate a real
+        // secret for any environment where the JWT fallback is actually used.
+        'jwt_secret' => getenv('IDENTITY_JWT_SECRET') ?: 'change-me-in-production-min-32-bytes-long',
+        'jwt_algorithm' => getenv('IDENTITY_JWT_ALGORITHM') ?: 'HS256',
+    ],
 ];

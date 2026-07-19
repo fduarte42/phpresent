@@ -11,19 +11,20 @@
     },
     "dependencies": {
         "@inertiajs/vue3": "^2.0.0",
+        "@vueuse/core": "^12.0.0",
         "naive-ui": "^2.40.3",
         "pinia": "^2.3.0",
         "sortablejs": "^1.15.6",
         "video.js": "^8.19.1",
-        "vue": "^3.5.13",
-        "@vueuse/core": "^12.0.0"
+        "vue": "^3.5.13"
     },
     "devDependencies": {
+        "@types/sortablejs": "^1.15.9",
         "@vitejs/plugin-vue": "^5.2.1",
         "@vue/tsconfig": "^0.7.0",
         "typescript": "^5.7.2",
         "vite": "^6.0.7",
-        "vue-tsc": "^2.2.0",
-        "vitest": "^2.1.8"
+        "vitest": "^2.1.8",
+        "vue-tsc": "^2.2.0"
     }
 }

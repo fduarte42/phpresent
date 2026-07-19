@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phpresent\Song\Infrastructure\Persistence;
+namespace Phpresent\Shared\Infrastructure\Persistence;
 
 use DateTimeImmutable;
 use Doctrine\ORM\EntityManagerInterface;
-use Phpresent\Song\Domain\Repository\SyncStateRepositoryInterface;
+use Phpresent\Shared\Domain\Repository\SyncStateRepositoryInterface;
 
 final class DoctrineSyncStateRepository implements SyncStateRepositoryInterface
 {

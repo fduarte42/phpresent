@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Doctrine\ORM\EntityManager;
 use Doctrine\ORM\ORMSetup;
 use Doctrine\ORM\Tools\SchemaTool;
+use Phpresent\Shared\Infrastructure\Persistence\EntityManagerFactory;
 use Phpresent\Song\Domain\Entity\Song;
 use Phpresent\Song\Domain\Entity\SongSection;
 use Phpresent\Song\Domain\ValueObject\LyricFormat;
@@ -13,6 +14,8 @@ use Phpresent\Song\Infrastructure\Persistence\DoctrineSongRepository;
 
 function makeInMemoryEntityManager(): EntityManager
 {
+    EntityManagerFactory::registerCustomTypes();
+
     $config = ORMSetup::createAttributeMetadataConfiguration(
         paths: [
             __DIR__ . '/../../../src/Song/Domain/Entity',
@@ -21,8 +24,9 @@ function makeInMemoryEntityManager(): EntityManager
         isDevMode: true,
     );
 
+    $dsnParser = new \Doctrine\DBAL\Tools\DsnParser(['sqlite' => 'pdo_sqlite']);
     $entityManager = new EntityManager(
-        \Doctrine\DBAL\DriverManager::getConnection(['url' => 'sqlite:///:memory:'], $config),
+        \Doctrine\DBAL\DriverManager::getConnection($dsnParser->parse('sqlite:///:memory:'), $config),
         $config,
     );
 
