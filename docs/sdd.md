@@ -162,27 +162,36 @@ controllers or JSON responses. Symfony Serializer converts DTO ⇄ JSON;
 mapping GraphQL response ⇄ DTO is a dedicated `SongGraphQLMapper` (keeps
 GraphQL's schema quirks out of the DTO itself).
 
-## 6. SongbookPro GraphQL Integration
+## 6. SongbookPro Groups GraphQL Integration
 
 `SongbookProClientInterface` (Domain-facing port) is implemented by
-`SongbookProGraphQLClient` (Infrastructure), composing:
+`SongbookProGraphQLClient` (Infrastructure). This section originally
+described a client built against an assumed API shape that was never
+verified; it now reflects the real, verified API (§6.1–§6.2, confirmed
+2026-07-19 by instrumenting a live browser session — see §16.8a for the
+history).
+
+`SongbookProGraphQLClient` composes:
 
 - **Transport**: Guzzle HTTP client, injected — swappable for tests.
-- **Pagination**: cursor-based, `PaginatedFetcher` walks `pageInfo.endCursor`
-  automatically until `hasNextPage` is false.
+- **Auth**: bearer JWT obtained through Azure AD B2C (§6.1). The client owns
+  token acquisition/refresh — there is no static API key. Exactly which
+  OAuth grant Phpresent (a server-side app, not the interactive web
+  dashboard) uses to obtain that token is not yet resolved — see §6.3.
+- **Delta sync, not cursor pagination**: `DeltaFetcher` calls
+  `GetDataItemsSince(library, since)` in a loop, feeding each response's
+  `timestamp` back in as the next `since` and continuing while `hasMore` is
+  true. `since` is persisted exactly where the original design already put
+  it — `sync_state.lastSyncedRevision` (§9/§16) — so no schema change was
+  needed, only the query shape and the loop condition (`hasMore` instead of
+  `pageInfo.hasNextPage`/`endCursor`).
 - **Retry**: `RetryingHttpClient` decorator — exponential backoff (bounded
   attempts, configurable), only retries idempotent queries and 5xx/network
   errors, never retries mutations blindly.
-- **ETag / conditional requests**: `ETagCache` (PSR-16 backed by Symfony
-  Cache) stores the ETag per query+variables hash; a `304` short-circuits to
-  the cached payload.
 - **Rate limiting**: token-bucket `RateLimiter` shared across all client
   instances (Symfony Cache-backed counter), configurable
   requests/second, applied before every request.
-- **Incremental sync**: sync log table stores `lastSyncedRevision` per
-  entity type; subsequent syncs request only records changed since that
-  revision (SongbookPro's `updatedSince` filter) instead of a full walk.
-- **Offline cache**: last-known-good GraphQL responses persisted to the
+- **Offline cache**: last-known-good `dataItems` responses persisted to the
   local DB (`sync_snapshot` table) so presentation keeps working if
   SongbookPro is briefly unreachable; sync becomes a background concern via
   Messenger, never blocking presentation.
@@ -193,6 +202,159 @@ GraphQL's schema quirks out of the DTO itself).
   (`SyncSongsCommand` re-dispatched on a configurable interval,
   `songbookpro.sync.interval_seconds`) rather than a cron-only design, so it
   also works under `RoadRunner`/long-running workers later.
+
+There is no `ETagCache`/conditional-request layer — the original design
+included one, but no `ETag`/`If-None-Match` exchange was observed in real
+traffic, and the `since`-based delta query already gives Phpresent the
+"don't re-fetch unchanged data" property that layer was meant to provide.
+
+### 6.1 Verified API Surface (reverse-engineered from live traffic, 2026-07-19)
+
+SongbookPro's real product for this integration is **SongbookPro Groups**
+(shared libraries for bands/teams), not a generic "SongbookPro API" — the
+GraphQL endpoint below is specific to it.
+
+- **Endpoint**: `POST https://songbookpro-groups-prod.azurewebsites.net/graphql`
+  — a single Apollo Server instance, most likely behind Azure API
+  Management or equivalent gateway middleware.
+- **Auth**: Azure AD B2C via MSAL.js (tenant `login.songbookpro.app`,
+  policy `b2c_1_sign_up_in_v1`). Every request must carry
+  `Authorization: Bearer <access token>`; a missing/invalid token is
+  rejected with `401` and `{"errors":[{"extensions":{"code":
+  "UNAUTHENTICATED"}}]}` **before** the GraphQL query is even parsed — this
+  confirms auth is enforced by a gateway layer in front of the resolvers,
+  not per-resolver. Phpresent's `SongbookProClientInterface` must therefore
+  own token acquisition/refresh (via the same B2C flow, or a
+  service-account-equivalent SongbookPro provides) rather than assuming a
+  static API key.
+- **Introspection is disabled in production**
+  (`extensions.validationErrorCode: "INTROSPECTION_DISABLED"` from Apollo
+  Server) — the schema cannot be self-discovered; the operations below are
+  the complete set observed by instrumenting a real browser session against
+  the SongbookPro Groups web dashboard (`groups.songbookpro.app/dashboard`)
+  and are not guaranteed exhaustive.
+- **Client-side batching**: the official web client (`@apollo/client`
+  v4.1.6, observed) sends a JSON *array* of operations in a single POST
+  body rather than one operation per request. Phpresent's client does not
+  need to replicate this — a single-operation body is accepted the same
+  way — but the response is a JSON array either way, so the transport layer
+  must unwrap `response[0]` rather than assume a bare object.
+
+### 6.2 Observed Operations and Data Model
+
+There is no dedicated `songs`/`songSets` query and no cursor pagination.
+Everything (songs, song content, and — by the same pattern, though not
+directly confirmed — sets) is synced through one generic timestamp-delta
+query and one generic upsert mutation, keyed by an opaque `type` string
+rather than a typed GraphQL field per entity kind:
+
+```graphql
+query GetDataItemsSince($library: ID!, $since: BigInt) {
+  dataItems(library: $library, since: $since) {
+    timestamp
+    hasMore
+    items {
+      id
+      type      # e.g. "SONG", "SONG_VARIANT" (observed); presumably "SET"-like
+                # types exist too but were not exercised in this session
+      deleted
+      data      # opaque JSON string, shape depends on `type`
+      __typename
+    }
+    __typename
+  }
+}
+
+mutation UpsertDataItems($items: [LibraryItemInput!]!, $library: ID!) {
+  addDataItems(items: $items, library: $library) {
+    id
+    type
+    deleted
+    data
+    __typename
+  }
+}
+```
+
+- **Pagination is cursor-free**: the client passes `since` (a unix
+  timestamp from the previous response's `timestamp` field) and gets back
+  everything changed after it, plus a `hasMore` boolean when the page is
+  capped. "Cursor" state is just the last-seen timestamp — see `DeltaFetcher`
+  in §6.
+- **Soft-delete, not removal**: deleting an item does not remove it from
+  future `dataItems` responses — it re-appears with `deleted: true` and
+  `data: null` (a tombstone). A sync handler must treat `deleted: true` as
+  "retire the local row," never as "absent from now on."
+- **Create/update and delete use the same mutation.** A create sends a full
+  `data` JSON payload with `deleted: false` and `id: null` (server assigns
+  the UUID); a delete sends just `id` + `type` + `deleted: true`, no `data`.
+  There is no separate `deleteSong`-style mutation.
+
+**`SONG_VARIANT` data payload** (chord/lyric content), observed on create:
+
+```json
+{"id": "", "variantName": null, "content": "", "key": 0, "keyShift": 0,
+ "type": 1, "crop": null, "importSource": "editor"}
+```
+
+**`SONG` data payload** (metadata), observed on create — field list is
+partial, response was truncated during capture:
+
+```json
+{"id": "", "title": "...", "subtitle": "", "cleanTitle": "...",
+ "artist": "", "timeSig": "", "tempo": 0, "url": null, "deepSearch...": "…"}
+```
+
+Two further operations exist for organization/account management (not
+song-sync related, but confirm the schema's general shape and may matter
+for a future multi-tenant/licensing story):
+
+```graphql
+query OrganizationWithUsers($id: ID!) {
+  organization(id: $id) {
+    id name
+    libraries { id }
+    users {
+      name id email isInvite suspended
+      permissions { permission libraries { library permission } }
+    }
+    plan { productId name provider expires appLicensed maximumUsers
+           billingUserId paddleSubscriptionId paddleStatus active canceled }
+  }
+}
+
+query Invites {
+  me { id invites { id organizationId organizationName } }
+}
+```
+
+Permissions are **per-library**, not just per-organization — a user can be
+an Editor on one library and have no access to another in the same org.
+Billing runs through **Paddle** (merchant-of-record subscriptions), not a
+direct Stripe integration.
+
+### 6.3 Open Questions for the Next SongbookPro-Sync Increment
+
+§6/§6.1/§6.2 now reflect the verified API, replacing the original,
+never-tested assumption of cursor-paginated `songs`/`songSets` queries.
+This means the *existing* Song/SongSet GraphQL Infrastructure code
+(`SongGraphQLMapper`, `SongSetGraphQLMapper`, the old `PaginatedFetcher`)
+was built against that incorrect assumption and needs rewriting to match
+this section before it will work against the real service — it was never
+caught earlier because those increments were built and tested only against
+`SongbookProClientInterface` fakes (§16.4), which never exercised the real
+schema. Two things remain unconfirmed and should be resolved as part of
+that rewrite, not assumed:
+
+- The `type` value(s) used for sets (`SET`? `SONG_SET`?) — capture traffic
+  from the Sets pages of the dashboard before implementing
+  `SongSetGraphQLMapper` against this model.
+- Which OAuth/B2C grant a server-side client (Phpresent) should use to
+  obtain its own bearer token, as opposed to the interactive
+  authorization-code-with-PKCE flow MSAL.js uses for a logged-in browser
+  session — this determines whether `SongbookProGraphQLClient` needs a
+  refresh-token store, a client-credentials grant, or something
+  SongbookPro-specific (e.g. a per-install API token issued out of band).
 
 ## 7. Presentation Engine (planned, see roadmap)
 
@@ -559,6 +721,21 @@ run" looks like. If a future increment hits a wall that "should just
 work" per the SDD, check whether that code path has actually been
 exercised yet before assuming the increment you're adding is at fault.
 
+### 16.8a §6 was rewritten against the real SongbookPro Groups API — the existing sync code was not
+
+§6/§6.1–§6.3 were rewritten to describe the actual GraphQL API (endpoint,
+auth, operations, data model), reverse-engineered from live traffic
+against a real logged-in session — not from documentation, since none is
+public and introspection is disabled in production. This replaced an
+earlier, never-tested assumption of cursor-paginated `songs`/`songSets`
+queries. The *code* has not been updated to match: the existing
+`SongGraphQLMapper`, `SongSetGraphQLMapper`, and `PaginatedFetcher` were
+built against that old assumption and have never been run against the
+real endpoint (§16.7 explains why: no increment to date exercised it
+beyond fakes). Read §6.3 before touching any of them — they need
+rewriting against the real `dataItems`/`addDataItems` delta-sync shape in
+§6.2, not extended as if they already matched it.
+
 ### 16.8 What to update alongside a new module
 
 When adding a module (e.g. SongSet), the checklist is: entities +
@@ -671,30 +848,33 @@ Design decisions:
 ### 17.3 SongbookPro GraphQL Integration
 
 Reuses the shared `GraphQLClientInterface`/`SongbookProGraphQLClient`
-infrastructure from §6 as-is (pagination, retry, ETag, rate-limit,
-incremental sync) — only a new query string and a new
-`SongSetGraphQLMapper` are added, in `src/SongSet/Infrastructure/SongbookPro`
-and `src/SongSet/Infrastructure/Mapper` respectively, following the same
-`songSets` connection shape as the `songs` connection in §6:
+infrastructure from §6 as-is (`DeltaFetcher`, retry, rate-limit, offline
+cache) — **there is no separate `songSets` query to add.** Per §6.2, sets
+sync through the same generic `GetDataItemsSince`/`UpsertDataItems`
+operations as songs, filtered by `type` rather than by a dedicated field.
+Only a new `SongSetGraphQLMapper` is added
+(`src/SongSet/Infrastructure/Mapper`), decoding `dataItems` items whose
+`type` matches the set entity kind:
 
 ```graphql
-query SongSets($after: String, $updatedSince: String, $first: Int!) {
-  songSets(after: $after, updatedSince: $updatedSince, first: $first) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        id
-        name
-        serviceDate
-        notes
-        revision
-        checksum
-        items { songId position transposedKey notes }
-      }
-    }
+# Same query as §6.2's GetDataItemsSince — no SongSet-specific query exists.
+# SongSetGraphQLMapper filters the returned `items` by `type` and decodes
+# each item's `data` JSON string into a SongSet/SongSetItem shape.
+query GetDataItemsSince($library: ID!, $since: BigInt) {
+  dataItems(library: $library, since: $since) {
+    timestamp
+    hasMore
+    items { id type deleted data }
   }
 }
 ```
+
+The exact `type` value used for sets (and whether a set's items are
+embedded in the same `data` payload or synced as their own item type) is
+**unconfirmed** — flagged as an open question in §6.3. Capture real Sets-page
+traffic before implementing `SongSetGraphQLMapper` against an assumed shape;
+don't repeat the mistake that produced the original (wrong) `songSets`
+connection design this section used to describe.
 
 ### 17.4 Database Schema
 
