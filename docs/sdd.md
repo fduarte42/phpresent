@@ -356,3 +356,126 @@ Each future increment adds its design to this document (architecture,
 schema, entities, repository interfaces, services, DTOs, endpoints, Vue
 pages/components, routes, tests) before implementation, per the project's
 own delivery convention.
+
+## 16. Conventions & Gotchas (read before starting a new module)
+
+These are the parts of the codebase that exist only as code today, not as
+prose elsewhere. A cold-start agent should read this section before adding
+the next module (SongSet, Identity, Presentation, ...) to stay consistent
+with what's already there instead of re-deriving or diverging from it.
+
+### 16.1 Dependency injection wiring pattern
+
+`config/autoload/dependencies.global.php` uses three mechanisms together —
+follow the same split for new modules:
+
+- **`aliases`**: interface → concrete class, for anything with no
+  config-driven constructor args (e.g. `SongRepositoryInterface::class =>
+  DoctrineSongRepository::class`).
+- **`factories`**: explicit closures, only for services whose constructor
+  needs scalar config values pulled from `$container->get('config')`
+  (`EntityManager`, `SongbookProGraphQLClient`, `RateLimiter`,
+  `InertiaResponseFactory`, the PSR-16 cache, the logger). If a class takes
+  a plain string/int/float with no default, it needs an explicit factory —
+  reflection can't supply those.
+- **`abstract_factories: [ReflectionBasedAbstractFactory::class]`**: the
+  fallback for everything else (handlers, application Command/Query
+  handlers, mappers, repositories) — their constructors only take
+  interfaces/classes (resolvable via the aliases above) or have scalar
+  defaults. Don't hand-write a factory for a class reflection can already
+  build.
+
+When adding a module: add its repository/service aliases and any
+config-dependent factories to this same file rather than creating a
+per-module dependencies file — there's only one `dependencies.global.php`
+by design, so wiring stays discoverable in one place.
+
+### 16.2 Doctrine entity mapping paths must be registered manually
+
+`src/Shared/Infrastructure/Persistence/EntityManagerFactory.php` passes an
+explicit `paths` array to `ORMSetup::createAttributeMetadataConfiguration()`
+— currently `Song/Domain/Entity` and `Song/Infrastructure/Persistence`.
+Doctrine will silently ignore entities outside these paths (no error, the
+table just never gets created/mapped). **Every new module that adds
+`#[ORM\Entity]` classes must add its own entity directory to this array**,
+and add the corresponding path list to any test that builds its own
+`EntityManager` (see 16.4) and to `cli-config.php`'s indirect dependency on
+the same factory.
+
+### 16.3 Inertia adapter is hand-rolled, not a package
+
+There is no official Inertia.js server-side adapter for Mezzio/PHP outside
+Laravel. `src/Shared/Infrastructure/Http/InertiaResponseFactory.php` is a
+from-scratch ~80-line implementation of the protocol (HTML shell with
+`data-page`, or JSON when `X-Inertia: true` is sent). Do not go looking for
+a Composer package to configure — extend this class (e.g. for shared props,
+partial reloads, or asset versioning) instead.
+
+Related gotcha: **Vite 6 writes its manifest to
+`public/build/.vite/manifest.json`**, not `public/build/manifest.json` as
+in older Vite/Laravel-Mix conventions. `InertiaResponseFactory`'s
+`assetTags()` and the factory in `dependencies.global.php` already point at
+the `.vite/` subdirectory — if this ever looks wrong, check the actual Vite
+version's output path before "fixing" it back.
+
+### 16.4 Test conventions
+
+- Pest groups: every file under `test/Unit` is tagged `unit`, everything
+  under `test/Integration` is tagged `integration` (see `test/Pest.php`).
+  Use `composer test:unit` / `composer test:integration` to run one or the
+  other; new test files just need to live in the right directory, no
+  per-file tagging required.
+- **In-memory fakes**, not mocking frameworks, for Application-layer tests:
+  see `test/Support/InMemorySongRepository.php`,
+  `InMemorySyncStateRepository.php`, `FakeSongSource.php`. They implement
+  the real Domain/Application interfaces so handler tests
+  (`test/Unit/Song/Application/SyncSongsHandlerTest.php`) exercise real
+  control flow without a database. Add one `InMemory*`/`Fake*` per
+  interface a new module introduces, in `test/Support/`, autoloaded under
+  `PhpresentTest\Support`.
+- **Integration tests use a throwaway in-memory SQLite `EntityManager`**,
+  not the app's configured database. See
+  `test/Integration/Song/DoctrineSongRepositoryTest.php`:
+  `ORMSetup::createAttributeMetadataConfiguration()` with the module's
+  entity paths (same list as §16.2), a `sqlite:///:memory:` DBAL
+  connection, then `SchemaTool::createSchema()` from the loaded metadata —
+  no migration run needed for tests.
+- Global helper functions declared at the top of a Pest test file (e.g.
+  `makeSong()`, `remoteSong()`) are in the global namespace for the whole
+  suite — keep names unique across files, or move a helper into
+  `test/Support/` as a real class if it's going to be reused from more than
+  one test file.
+
+### 16.5 PHP version target vs. what's actually installed
+
+The brief specifies PHP 8.5+. `composer.json` currently pins `"php":
+"^8.3"` because PHP 8.5 does not exist in any environment this project has
+been built or run in so far (including this sandbox, which has 8.4.19).
+This is a deliberate, temporary downgrade of the *constraint*, not a scope
+cut — no 8.5-only syntax has been used. Bump the constraint back to `^8.5`
+once a real PHP 8.5 runtime is available to test against; don't do it
+speculatively without verifying `composer install` and the test suite still
+pass under it.
+
+### 16.6 Sandbox/CI network caveat (not a code bug)
+
+In at least one development sandbox for this project, `composer install`
+could not complete: outbound access to GitHub's dist/codeload endpoints was
+blocked by that session's network policy, causing every package to fail
+"download from dist" and then fail again on the git-source fallback
+("Could not authenticate against github.com"). This is an environment
+constraint, not a problem with `composer.json` — if you hit the identical
+failure signature, don't start editing dependency versions or lockfiles to
+"fix" it; confirm first whether the environment simply can't reach GitHub,
+and prefer running `composer install` in CI or a normal environment. `npm
+install` / `vue-tsc --noEmit` / `vite build` all worked without issue in
+that same sandbox, so the frontend toolchain is not affected by this.
+
+### 16.7 What to update alongside a new module
+
+When adding a module (e.g. SongSet), the checklist is: entities +
+migration (16.2), repository interface + Doctrine implementation, DI
+wiring (16.1), routes in `config/routes.php`, an SDD section (schema,
+entities, DTOs, endpoints — following the style of §4–§11) added *before*
+the code per the project's delivery convention, `test/Support/` fakes for
+any new interfaces (16.4), and a roadmap line moved from ⏳ to ✅ in §15.
