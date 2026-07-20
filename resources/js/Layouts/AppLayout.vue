@@ -16,6 +16,7 @@ const navLinks = [
     { href: '/themes', label: 'Themes' },
     { href: '/bible', label: 'Bible' },
     { href: '/users', label: 'Users' },
+    { href: '/backup', label: 'Backup' },
 ];
 
 function onLogout(): void {

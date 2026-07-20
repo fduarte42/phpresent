@@ -32,7 +32,7 @@ it('creates an admin role and user on first run', function (): void {
 
     $role = $roles->findByName('admin');
     expect($role)->not->toBeNull();
-    expect($role->permissions())->toBe(['users.view', 'users.manage', 'roles.view', 'roles.manage']);
+    expect($role->permissions())->toBe(['users.view', 'users.manage', 'roles.view', 'roles.manage', 'backup.manage']);
 
     $user = $users->findByEmail('admin@example.com');
     expect($user)->not->toBeNull();

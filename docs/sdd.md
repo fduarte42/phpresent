@@ -962,7 +962,17 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   unbuilt — deliberately: `jobs` has no queue to show, and a logs/sync
   viewer needs real backend work (querying `audit_log`, `sync_state`), not
   a UI bolted onto data no endpoint exposes yet.
-- ⏳ Import/export (OpenLyrics, PDF, JSON/ZIP backup)
+- ✅ Import/export — eleventh increment (§23). Scoped to JSON/ZIP backup
+  export + import (a full-instance disaster-recovery archive: displays,
+  themes, media assets + files, Bible bookmarks, roles, users), not
+  OpenLyrics/PDF — those are per-song interchange formats, a different
+  feature from "back up and restore this instance," and Song/SongSet are
+  explicitly out of scope for either since they're always re-synced from
+  SongbookPro (§1/§6). Manually verified end to end in a real browser and
+  via the REST API: created a display, a theme, and a Bible bookmark,
+  exported a backup, wiped the dev database back to a fresh migration,
+  bootstrapped a new admin, imported the archive, and confirmed all three
+  entities reappeared correctly in the UI.
 - ⏳ OpenAPI generation, full REST surface
 
 Each future increment adds its design to this document (architecture,
@@ -2028,3 +2038,114 @@ php bin/console.php identity:create-admin \
 Each of these is "add a small piece of real backend, then a thin page for
 it" — the same pattern this increment followed for Users/Roles — not
 attempted here because none of the underlying data existed yet to show.
+
+## 23. Backup Module (eleventh increment)
+
+A single JSON/ZIP archive covering every table Phpresent owns locally:
+`Display` (§7.1), `Theme` (§20), `MediaAsset` + its stored bytes (§19),
+`BibleBookmark` (§21), `Role`/`User` (§18.1). Deliberately excludes
+Song/SongSet — they're always re-synced from SongbookPro, never a local
+source of truth (§1/§6) — and `sync_state` (§9/§16), since
+`SyncStateRepositoryInterface` has no "list all" method and a post-restore
+full resync is already safe, designed-for behavior.
+
+Meant for disaster recovery (restoring into an empty/fresh install), not
+merging into a populated one: `Role`/`User` are matched by their unique
+`name`/`email` and reused rather than duplicated on a second import of the
+same archive, but `Display`/`Theme`/`MediaAsset`/`BibleBookmark` have no
+natural unique key, so re-importing the same archive into a database that
+already has them creates duplicates.
+
+### 23.1 Application Layer
+
+- `Backup\Application\Service\BackupArchiverInterface` — a generic "write
+  JSON tables + binary files to an archive, read them back" port. It
+  deliberately knows nothing about Displays/Themes/Media/etc. (that domain
+  knowledge belongs to the handlers below), the same separation §19.2's
+  `MediaStorageInterface` keeps between "how to store bytes" and "what a
+  `MediaAsset` is."
+- `ExportBackupHandler` (`backup.manage` permission, §18.2) — reads every
+  repository via each module's own `Domain\Repository` interface (the
+  same cross-module Application-layer dependency pattern established by
+  `SongSet\Application\Query\GetSongSetHandler` → `Song\Domain\Repository\
+  SongRepositoryInterface`), maps each entity to a plain array row, and
+  streams each `MediaAsset`'s bytes via `MediaStorageInterface::
+  readStream()` (§19.2) into `media/{storageKey}` archive entries. Rows
+  include `User::passwordHash` — a bcrypt hash, never plaintext — because
+  a hash is no more sensitive than a raw database dump and excluding it
+  would make a restored instance unusable without a password-reset flow
+  that doesn't exist; the Vue UI (§23.3) flags this explicitly so an
+  operator treats the downloaded file with the same care as a DB dump.
+- `ImportBackupHandler` (`backup.manage`) — restores an archive.
+  Every restored entity gets a *fresh* id (none of these entities'
+  constructors accept one — they generate their own, §7.1/§18.1/§19.1/
+  §20/§21.1), which is why `User.roleIds` has to be remapped: roles are
+  imported first, building an old-id → new-`Role` map, then each user's
+  `roleIds` is translated through it before the `User` is constructed.
+  This is intentionally the *only* cross-reference the handler fixes up —
+  `Theme.backgroundMediaAssetId` is left pointing at whatever id was
+  exported, unremapped, because that field already tolerates a
+  dangling/unresolvable reference by design (the same
+  `SongSetItem`-style reasoning §19.1 uses: the referenced thing doesn't
+  have to exist). Media assets get a freshly generated storage key (UUID
+  prefix + sanitized original filename) on import — never reusing the
+  exported key — with their bytes looked up from the archive by the *old*
+  key; a row whose bytes are missing from the archive is skipped, not
+  fatal.
+
+### 23.2 Infrastructure
+
+- `Backup\Infrastructure\Zip\ZipBackupArchiver` implements
+  `BackupArchiverInterface` with PHP's `ZipArchive`. Writes a
+  `manifest.json` (format version, creation timestamp, table list) plus
+  one `{table}.json` per table and one archive entry per media file under
+  `media/`.
+  `ZipArchive::addStream()` does **not** exist in this PHP/libzip build
+  despite being documented as available since PHP 7.4 (verified by
+  actually running it, not by trusting the docs — §16.7's own convention)
+  — `get_class_methods('ZipArchive')` shows only `addFile`,
+  `addFromString`, `addEmptyDir`, `addGlob`, `addPattern`, no
+  `addStream`. Worked around by spooling each `StreamInterface`'s content
+  to its own temp file first, then `addFile()`-ing that path, deleting
+  the temp files only *after* `$zip->close()` (since `addFile()` reads
+  lazily at close time, not immediately).
+
+### 23.3 REST API
+
+| Method | Path                 | Handler               | Notes                                    |
+|--------|----------------------|------------------------|-------------------------------------------|
+| GET    | `/api/backup/export` | `ExportBackupHandler`  | Streams a ZIP, `Content-Disposition: attachment` |
+| POST   | `/api/backup/import` | `ImportBackupHandler`  | Multipart file upload, returns `BackupImportResult` counts |
+
+Both require `backup.manage`, granted to the `admin` role created by
+`identity:create-admin` (§22.1) alongside the four existing permissions.
+
+### 23.4 Frontend
+
+`Pages/Backup/Index.vue` (`GET /backup`, `BackupPageHandler`) — an Export
+card (a plain link to the export endpoint, plus the password-hash
+sensitivity warning) and an Import card (hidden file input, `FormData`
+POST, and a result summary listing per-table imported/skipped/reused
+counts from the response). Added to `AppLayout.vue`'s nav alongside the
+other admin pages.
+
+### 23.5 Manual verification
+
+Booted the app, bootstrapped an admin, created one of each importable
+entity (a `Display`, a `Theme`, a `BibleBookmark`) through their existing
+pages, exported a backup via the API, wiped the dev SQLite database back
+to a fresh migration (simulating disaster recovery), bootstrapped a new
+admin against the empty database, imported the archive, and confirmed in
+the UI that the display, theme, and bookmark all reappeared with their
+original data — and that the `admin` role (already present from the
+fresh bootstrap, same name) was reused rather than duplicated, while the
+original `admin@example.com` user was imported as a new row alongside the
+freshly bootstrapped one (different email, so no reuse — matching the
+idempotency rule in §23's intro).
+
+### 23.6 What's still not built, and why
+
+OpenLyrics/PDF export were explicitly scoped out of this increment (see
+§15's roadmap entry) — they're per-song interchange formats, not part of
+"back up and restore this instance," and would need their own design
+against the Song module.

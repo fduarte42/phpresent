@@ -32,7 +32,9 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 #[AsCommand(name: 'identity:create-admin', description: 'Creates the first admin user and an "admin" role with every known permission.')]
 final class CreateAdminCommand extends Command
 {
-    private const array ADMIN_PERMISSIONS = ['users.view', 'users.manage', 'roles.view', 'roles.manage'];
+    private const array ADMIN_PERMISSIONS = [
+        'users.view', 'users.manage', 'roles.view', 'roles.manage', 'backup.manage',
+    ];
 
     public function __construct(
         private readonly UserRepositoryInterface $userRepository,

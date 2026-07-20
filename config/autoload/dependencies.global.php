@@ -86,6 +86,11 @@ use Phpresent\Bible\Presentation\Http\Handler\GetPassageHandler;
 use Phpresent\Bible\Presentation\Http\Handler\ListBookmarksHandler as ListBookmarksHttpHandler;
 use Phpresent\Bible\Presentation\Http\Handler\ListTranslationsHandler;
 use Phpresent\Bible\Presentation\Http\Handler\SearchBibleHandler as SearchBibleHttpHandler;
+use Phpresent\Backup\Application\Service\BackupArchiverInterface;
+use Phpresent\Backup\Infrastructure\Zip\ZipBackupArchiver;
+use Phpresent\Backup\Presentation\Http\Handler\BackupPageHandler;
+use Phpresent\Backup\Presentation\Http\Handler\ExportBackupHandler as ExportBackupHttpHandler;
+use Phpresent\Backup\Presentation\Http\Handler\ImportBackupHandler as ImportBackupHttpHandler;
 use Phpresent\Theme\Domain\Repository\ThemeRepositoryInterface;
 use Phpresent\Theme\Infrastructure\Persistence\DoctrineThemeRepository;
 use Phpresent\Theme\Presentation\Http\Handler\CreateThemeHandler as CreateThemeHttpHandler;
@@ -124,6 +129,7 @@ return [
             MediaStorageInterface::class => FlysystemMediaStorage::class,
             FilesystemOperator::class => Filesystem::class,
             ThemeRepositoryInterface::class => DoctrineThemeRepository::class,
+            BackupArchiverInterface::class => ZipBackupArchiver::class,
             BibleBookmarkRepositoryInterface::class => DoctrineBibleBookmarkRepository::class,
         ],
         'factories' => [
@@ -317,6 +323,10 @@ return [
             UpdateThemeHttpHandler::class => ReflectionBasedAbstractFactory::class,
             DeleteThemeHandler::class => ReflectionBasedAbstractFactory::class,
             ThemesIndexPageHandler::class => ReflectionBasedAbstractFactory::class,
+
+            ExportBackupHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            ImportBackupHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            BackupPageHandler::class => ReflectionBasedAbstractFactory::class,
 
             ListTranslationsHandler::class => ReflectionBasedAbstractFactory::class,
             SearchBibleHttpHandler::class => ReflectionBasedAbstractFactory::class,

@@ -40,6 +40,9 @@ use Phpresent\Bible\Presentation\Http\Handler\GetPassageHandler;
 use Phpresent\Bible\Presentation\Http\Handler\ListBookmarksHandler;
 use Phpresent\Bible\Presentation\Http\Handler\ListTranslationsHandler;
 use Phpresent\Bible\Presentation\Http\Handler\SearchBibleHandler;
+use Phpresent\Backup\Presentation\Http\Handler\BackupPageHandler;
+use Phpresent\Backup\Presentation\Http\Handler\ExportBackupHandler;
+use Phpresent\Backup\Presentation\Http\Handler\ImportBackupHandler;
 use Phpresent\Theme\Presentation\Http\Handler\CreateThemeHandler;
 use Phpresent\Theme\Presentation\Http\Handler\DeleteThemeHandler;
 use Phpresent\Theme\Presentation\Http\Handler\GetThemeHandler;
@@ -129,4 +132,8 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
     $app->get('/api/bible/bookmarks', ListBookmarksHandler::class, 'api.bible.bookmarks.list');
     $app->post('/api/bible/bookmarks', CreateBookmarkHandler::class, 'api.bible.bookmarks.create');
     $app->delete('/api/bible/bookmarks/{id}', DeleteBookmarkHandler::class, 'api.bible.bookmarks.delete');
+
+    $app->get('/backup', BackupPageHandler::class, 'backup.index');
+    $app->get('/api/backup/export', ExportBackupHandler::class, 'api.backup.export');
+    $app->post('/api/backup/import', ImportBackupHandler::class, 'api.backup.import');
 };
