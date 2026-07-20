@@ -912,7 +912,13 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   confirmed both DB row and on-disk file are cleaned up together). ⏳ Not
   wired into `SlideComposer`/live presentation yet — a deliberate scope cut
   (§19), not an oversight.
-- ⏳ Theme engine
+- ✅ Theme module (see §20): `Theme` (global/song/section scoped, with
+  scope-target invariants enforced in the Domain layer), CRUD REST
+  endpoints, `Themes/Index.vue` management UI (scope-conditional form
+  fields), migration, unit + integration tests, manually verified in a real
+  browser across all three scopes including the invariant validation path.
+  ⏳ Not wired into `SlideComposer`/rendering yet — a deliberate scope cut
+  (§20), same reasoning as Media's (§19).
 - ⏳ Bible module + provider plugin(s)
 - ⏳ Plugin registry + first-party plugins (OBS, MIDI, StreamDeck, NDI, DMX)
 - ⏳ Admin UI (dashboard, users, roles, displays, themes, media, logs, jobs,
@@ -1670,3 +1676,120 @@ matched the source file exactly, confirmed the thumbnail rendered from the
 streamed `/file` endpoint, searched, and removed — then confirmed via the
 REST API and the filesystem directly that removal deleted *both* the
 database row and the on-disk file, not just one or the other.
+
+## 20. Theme Module (eighth increment)
+
+A visual style, at one of three scopes (SDD §2: "theme engine (global /
+song / section scoped)"). Scoped to storage + CRUD REST + a management UI
+only, same cut as Media's (§19) — resolving *which* theme actually applies
+to a given slide during rendering (the natural next step: Section overrides
+Song overrides Global) is left for a follow-up increment that touches
+`SlideComposer`, once `SlideComposer` itself is being extended anyway
+rather than as a side effect of this one.
+
+### 20.1 Domain Model
+
+```
+Theme (aggregate root)
+ ├─ id: ThemeId (UUIDv4)
+ ├─ name: string
+ ├─ scope: ThemeScope (Global | Song | Section)
+ ├─ songExternalId: ?string     // set only when scope = Song
+ ├─ sectionType: ?string         // set only when scope = Section — plain
+ │                               // string, not Song\Domain\ValueObject\
+ │                               // SectionType (cross-module Domain rule,
+ │                               // same as Slide::sectionType, §7.1)
+ ├─ backgroundColor: ?string     // hex color
+ ├─ backgroundMediaAssetId: ?string  // plain string ref into Media module
+ ├─ fontFamily: ?string
+ ├─ fontColor: ?string
+ ├─ fontSizeScale: float (default 1.0)
+ ├─ textAlign: TextAlign (Left | Center | Right)
+ ├─ createdAt: DateTimeImmutable
+ └─ updatedAt: DateTimeImmutable
+```
+
+Design decisions:
+
+- **Scope and target are validated together as one Domain invariant**,
+  enforced in the constructor and re-checked on `update()`: `Global` must
+  have neither `songExternalId` nor `sectionType` set; `Song` requires
+  `songExternalId` and forbids `sectionType`; `Section` requires
+  `sectionType` and forbids `songExternalId`. `InvalidThemeScopeException`
+  carries a distinct factory method per violation
+  (`songExternalIdRequired()`, `sectionTypeRequired()`,
+  `targetNotAllowed()`) so the REST error message says exactly what was
+  wrong, not a generic "invalid theme."
+- **No validation that a referenced `songExternalId` or
+  `backgroundMediaAssetId` actually exists.** Same reasoning as
+  `SongSetItem::songExternalId` (§17.1) — a theme can legitimately be
+  authored before the song it targets is synced, or before an image is
+  uploaded.
+- **No precedence/resolution logic lives here.** `ThemeScope`'s three
+  levels are *named* with an implied specificity ordering (Section overrides
+  Song overrides Global), but nothing in this increment resolves "which
+  theme wins for this slide" — that's rendering logic, not a storage
+  concern, and belongs with the `SlideComposer` follow-up.
+
+### 20.2 Application Layer
+
+`CreateThemeCommand`/`Handler`, `UpdateThemeCommand`/`Handler`,
+`RemoveThemeCommand`/`Handler`, `ListThemesQuery`/`Handler`,
+`GetThemeQuery`/`Handler` — same CRUD shape as every other module (§5).
+`scope`/`textAlign` are passed as strings and parsed via `ThemeScope::
+from()`/`TextAlign::from()` inside the handler (native `ValueError` on an
+unknown value), matching the `DisplayRole::from()` precedent (§7.2) rather
+than introducing bespoke parsing.
+
+### 20.3 Database Schema
+
+```sql
+CREATE TABLE themes (
+    id                          CHAR(36) PRIMARY KEY,
+    name                        VARCHAR(191) NOT NULL,
+    scope                       VARCHAR(16) NOT NULL,
+    song_external_id            VARCHAR(191),
+    section_type                VARCHAR(24),
+    background_color            VARCHAR(16),
+    background_media_asset_id   VARCHAR(191),
+    font_family                 VARCHAR(191),
+    font_color                  VARCHAR(16),
+    font_size_scale             FLOAT NOT NULL DEFAULT 1.0,
+    text_align                  VARCHAR(8) NOT NULL,
+    created_at                  DATETIME NOT NULL,
+    updated_at                  DATETIME NOT NULL
+);
+CREATE INDEX idx_themes_scope ON themes(scope);
+```
+
+### 20.4 REST API
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/themes` | list all themes |
+| GET | `/api/themes/{id}` | get one theme |
+| POST | `/api/themes` | create a theme |
+| PATCH | `/api/themes/{id}` | update a theme |
+| DELETE | `/api/themes/{id}` | remove a theme |
+
+`POST`/`PATCH` catch both `ValueError` (bad `scope`/`textAlign`) and
+`InvalidThemeScopeException` (bad scope/target combination), returning
+`400` with the exception's own message — same explicit-catch convention as
+elsewhere (§10/§18.4) rather than a generic exception-to-response mapper.
+
+### 20.5 Frontend
+
+`Pages/Themes/Index.vue` — a form (create or edit, `editingId` tracking
+which) above an `n-data-table` list, mirroring the create-form-above-table
+shape of `Displays/Index.vue` (§11.1). The scope `n-select` conditionally
+reveals a Song-External-ID input or a Section-Type `n-select` — verified in
+a real browser to actually reveal/hide correctly and to submit the right
+combination for all three scopes, plus that the REST layer's
+`InvalidThemeScopeException` message surfaces back to the operator when a
+save is attempted with an invalid combination. `useThemesStore` wraps
+list/create/update/remove; unlike every earlier CRUD store in this
+codebase, it parses the REST error body's `title` for display (`Displays`'
+store just throws a generic message) — worth doing here specifically
+because the Domain invariant errors (§20.1) are the one case in this
+module where the *server's* validation message is actually informative to
+show the user, not just "request failed."

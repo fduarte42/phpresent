@@ -30,6 +30,12 @@ use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlPageHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationSseHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\UpdateDisplayHandler;
+use Phpresent\Theme\Presentation\Http\Handler\CreateThemeHandler;
+use Phpresent\Theme\Presentation\Http\Handler\DeleteThemeHandler;
+use Phpresent\Theme\Presentation\Http\Handler\GetThemeHandler;
+use Phpresent\Theme\Presentation\Http\Handler\ListThemesHandler;
+use Phpresent\Theme\Presentation\Http\Handler\ThemesIndexPageHandler;
+use Phpresent\Theme\Presentation\Http\Handler\UpdateThemeHandler;
 use Phpresent\Song\Presentation\Http\Handler\GetSongHandler;
 use Phpresent\Song\Presentation\Http\Handler\ListSongsHandler;
 use Phpresent\Song\Presentation\Http\Handler\SongsIndexPageHandler;
@@ -91,4 +97,12 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
     $app->get('/api/media/{id}/file', DownloadMediaAssetHandler::class, 'api.media.download');
     $app->post('/api/media', UploadMediaAssetHandler::class, 'api.media.upload');
     $app->delete('/api/media/{id}', DeleteMediaAssetHandler::class, 'api.media.delete');
+
+    $app->get('/themes', ThemesIndexPageHandler::class, 'themes.index');
+
+    $app->get('/api/themes', ListThemesHandler::class, 'api.themes.list');
+    $app->get('/api/themes/{id}', GetThemeHandler::class, 'api.themes.get');
+    $app->post('/api/themes', CreateThemeHandler::class, 'api.themes.create');
+    $app->patch('/api/themes/{id}', UpdateThemeHandler::class, 'api.themes.update');
+    $app->delete('/api/themes/{id}', DeleteThemeHandler::class, 'api.themes.delete');
 };

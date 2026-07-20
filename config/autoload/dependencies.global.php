@@ -72,6 +72,14 @@ use Phpresent\Song\Presentation\Http\Handler\SyncSongsHandler as SyncSongsHttpHa
 use Phpresent\SongbookPro\Infrastructure\GraphQL\GraphQLClientInterface;
 use Phpresent\SongbookPro\Infrastructure\GraphQL\RateLimiter;
 use Phpresent\SongbookPro\Infrastructure\GraphQL\SongbookProGraphQLClient;
+use Phpresent\Theme\Domain\Repository\ThemeRepositoryInterface;
+use Phpresent\Theme\Infrastructure\Persistence\DoctrineThemeRepository;
+use Phpresent\Theme\Presentation\Http\Handler\CreateThemeHandler as CreateThemeHttpHandler;
+use Phpresent\Theme\Presentation\Http\Handler\DeleteThemeHandler;
+use Phpresent\Theme\Presentation\Http\Handler\GetThemeHandler as GetThemeHttpHandler;
+use Phpresent\Theme\Presentation\Http\Handler\ListThemesHandler as ListThemesHttpHandler;
+use Phpresent\Theme\Presentation\Http\Handler\ThemesIndexPageHandler;
+use Phpresent\Theme\Presentation\Http\Handler\UpdateThemeHandler as UpdateThemeHttpHandler;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use Psr\SimpleCache\CacheInterface as SimpleCacheInterface;
@@ -101,6 +109,7 @@ return [
             MediaAssetRepositoryInterface::class => DoctrineMediaAssetRepository::class,
             MediaStorageInterface::class => FlysystemMediaStorage::class,
             FilesystemOperator::class => Filesystem::class,
+            ThemeRepositoryInterface::class => DoctrineThemeRepository::class,
         ],
         'factories' => [
             EntityManager::class => EntityManagerFactory::class,
@@ -271,6 +280,13 @@ return [
             DownloadMediaAssetHandler::class => ReflectionBasedAbstractFactory::class,
             DeleteMediaAssetHandler::class => ReflectionBasedAbstractFactory::class,
             MediaIndexPageHandler::class => ReflectionBasedAbstractFactory::class,
+
+            ListThemesHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            GetThemeHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            CreateThemeHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            UpdateThemeHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            DeleteThemeHandler::class => ReflectionBasedAbstractFactory::class,
+            ThemesIndexPageHandler::class => ReflectionBasedAbstractFactory::class,
 
             UploadMediaAssetHttpHandler::class => static function (
                 ContainerInterface $container,

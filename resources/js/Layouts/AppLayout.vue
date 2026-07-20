@@ -13,6 +13,7 @@ const navLinks = [
     { href: '/displays', label: 'Displays' },
     { href: '/presentation', label: 'Live Control' },
     { href: '/media', label: 'Media' },
+    { href: '/themes', label: 'Themes' },
 ];
 </script>
 
