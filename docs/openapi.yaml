@@ -1,0 +1,1262 @@
+openapi: 3.0.3
+info:
+  title: Phpresent API
+  version: "1.0"
+  description: |
+    REST surface for Phpresent, a church presentation application synchronized
+    with SongbookPro Groups. Covers every `/api/*` endpoint plus the session
+    `/login`/`/logout` and realtime `/sse/{displayId}` routes; see
+    `docs/sdd.md` for the full architecture and per-module design.
+
+    Song and Song Set content is read-only from this API's point of view —
+    it is a projection of SongbookPro Groups, synced via the `/sync`
+    endpoints, never edited directly (§1/§6/§17 of the SDD).
+
+    Authentication is a server-side session cookie (`PHPSESSID`), set by
+    `POST /login`. There is no bearer-token/API-key auth in this codebase
+    today.
+  license:
+    name: MIT
+servers:
+  - url: /
+    description: Same-origin (this API is served by the same Mezzio app as the Vue/Inertia frontend)
+tags:
+  - name: Songs
+  - name: Song Sets
+  - name: Identity
+  - name: Displays
+  - name: Presentation
+  - name: Media
+  - name: Themes
+  - name: Bible
+  - name: Backup
+
+paths:
+  # ---------------------------------------------------------------- Songs
+  /api/songs:
+    get:
+      tags: [Songs]
+      summary: List / search songs
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Song' }
+
+  /api/songs/{id}:
+    get:
+      tags: [Songs]
+      summary: Get a single song with its ordered sections
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Song' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/songs/sync:
+    post:
+      tags: [Songs]
+      summary: Trigger a foreground sync pass against SongbookPro Groups
+      description: Admin-only (route-level auth middleware); pulls a delta (or full resync) and upserts local Song rows.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                forceFullSync: { type: boolean, default: false }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/SyncResult' }
+
+  # ------------------------------------------------------------- Song Sets
+  /api/songsets:
+    get:
+      tags: [Song Sets]
+      summary: List / search song sets
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/SongSet' }
+
+  /api/songsets/{id}:
+    get:
+      tags: [Song Sets]
+      summary: Get a single song set with its ordered items
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/SongSet' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/songsets/sync:
+    post:
+      tags: [Song Sets]
+      summary: Trigger a foreground sync pass against SongbookPro Groups
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                forceFullSync: { type: boolean, default: false }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/SyncResult' }
+
+  /api/songsets/{id}/reorder:
+    post:
+      tags: [Song Sets]
+      summary: Reorder the items within a song set (local-only display state, never pushed back to SongbookPro)
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itemIds]
+              properties:
+                itemIds:
+                  type: array
+                  items: { type: string, format: uuid }
+                  description: SongSetItem ids in the desired order.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/SongSet' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # --------------------------------------------------------------- Identity
+  /login:
+    post:
+      tags: [Identity]
+      summary: Log in and start a session
+      description: Deliberately not permission-gated — this endpoint *is* the gate.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: OK — session cookie is set
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/User' }
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /logout:
+    post:
+      tags: [Identity]
+      summary: Clear the current session
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { nullable: true }
+
+  /api/users:
+    get:
+      tags: [Identity]
+      summary: List users
+      description: Requires the `users.view` permission.
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Identity]
+      summary: Create a user
+      description: Requires the `users.manage` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, displayName]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                displayName: { type: string }
+                roleIds:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /api/users/{id}:
+    get:
+      tags: [Identity]
+      summary: Get a user
+      description: Requires the `users.view` permission.
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/users/{id}/roles:
+    post:
+      tags: [Identity]
+      summary: Assign a role to a user
+      description: Requires the `users.manage` permission.
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roleId]
+              properties:
+                roleId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/users/{id}/deactivate:
+    post:
+      tags: [Identity]
+      summary: Deactivate a user
+      description: Requires the `users.manage` permission.
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/roles:
+    get:
+      tags: [Identity]
+      summary: List roles
+      description: Requires the `roles.view` permission.
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Role' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Identity]
+      summary: Create a role
+      description: Requires the `roles.manage` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                permissions:
+                  type: array
+                  items: { type: string }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Role' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  # ------------------------------------------------------------- Displays
+  /api/displays:
+    get:
+      tags: [Displays]
+      summary: List displays
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Display' }
+    post:
+      tags: [Displays]
+      summary: Create a display
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DisplayInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Display' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/displays/{id}:
+    get:
+      tags: [Displays]
+      summary: Get a display
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Display' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Displays]
+      summary: Update a display
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DisplayInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Display' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Displays]
+      summary: Delete a display
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------- Presentation
+  /api/presentation:
+    get:
+      tags: [Presentation]
+      summary: Get the current live-presentation session state
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/PresentationSession' }
+
+  /api/presentation/load:
+    post:
+      tags: [Presentation]
+      summary: Load a song into the live presentation session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [songId]
+              properties:
+                songId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/PresentationSession' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/presentation/control:
+    post:
+      tags: [Presentation]
+      summary: Send an operator control action to the live session
+      description: |
+        Single multiplexed endpoint standing in for what would otherwise be
+        eight near-identical routes — one per control action.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [next, previous, jump, blank, freeze, hideLyrics, fontSize, emergencyMessage]
+                value:
+                  description: 'Meaning depends on `action`: int for jump/fontSize, bool for blank/freeze/hideLyrics, string-or-null for emergencyMessage.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/PresentationSession' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /sse/{displayId}:
+    get:
+      tags: [Presentation]
+      summary: Server-Sent Events stream of the live-presentation session
+      description: |
+        `displayId` is accepted but not currently used to scope the stream —
+        every connection receives the same global session state (§13.3).
+        Not a JSON response: the endpoint holds the connection open as
+        `text/event-stream`, polling internally and emitting one `data:`
+        frame (`{"data": PresentationSession}`) per change, plus periodic
+        `: ping` heartbeat comments. Reconnect after ~55s (the server closes
+        the stream after `maxDurationSeconds`).
+      parameters:
+        - name: displayId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: text/event-stream connection
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  # --------------------------------------------------------------- Media
+  /api/media:
+    get:
+      tags: [Media]
+      summary: List / search media assets
+      parameters:
+        - $ref: '#/components/parameters/q'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/MediaAsset' }
+    post:
+      tags: [Media]
+      summary: Upload a media asset
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/MediaAsset' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413':
+          description: Upload exceeds the server's configured size limit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/media/{id}:
+    get:
+      tags: [Media]
+      summary: Get a media asset's metadata
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/MediaAsset' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Media]
+      summary: Delete a media asset (removes both the DB row and the stored file)
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/media/{id}/file:
+    get:
+      tags: [Media]
+      summary: Download/stream the raw file bytes
+      description: Not a JSON response — raw binary with `Content-Type` set to the asset's own MIME type.
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Binary file content
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # --------------------------------------------------------------- Themes
+  /api/themes:
+    get:
+      tags: [Themes]
+      summary: List themes
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Theme' }
+    post:
+      tags: [Themes]
+      summary: Create a theme
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThemeInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Theme' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/themes/{id}:
+    get:
+      tags: [Themes]
+      summary: Get a theme
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Theme' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Themes]
+      summary: Update a theme
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThemeInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Theme' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Themes]
+      summary: Delete a theme
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Bible
+  /api/bible/translations:
+    get:
+      tags: [Bible]
+      summary: List translations available across all registered Bible providers
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/BibleTranslation' }
+
+  /api/bible/search:
+    get:
+      tags: [Bible]
+      summary: Full-text search scripture
+      parameters:
+        - name: translationId
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/q'
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/BibleVerse' }
+
+  /api/bible/passage:
+    get:
+      tags: [Bible]
+      summary: Load a passage by book/chapter/verse range
+      parameters:
+        - name: translationId
+          in: query
+          schema: { type: string }
+        - name: book
+          in: query
+          schema: { type: string }
+        - name: chapter
+          in: query
+          schema: { type: integer }
+        - name: startVerse
+          in: query
+          schema: { type: integer, nullable: true }
+        - name: endVerse
+          in: query
+          schema: { type: integer, nullable: true }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/BiblePassage' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/bible/bookmarks:
+    get:
+      tags: [Bible]
+      summary: List saved Bible bookmarks
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/BibleBookmark' }
+    post:
+      tags: [Bible]
+      summary: Save a Bible bookmark
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [translationId, book, chapter]
+              properties:
+                translationId: { type: string }
+                book: { type: string }
+                chapter: { type: integer }
+                startVerse: { type: integer, nullable: true }
+                endVerse: { type: integer, nullable: true }
+                label: { type: string, nullable: true }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/BibleBookmark' }
+
+  /api/bible/bookmarks/{id}:
+    delete:
+      tags: [Bible]
+      summary: Delete a Bible bookmark
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # -------------------------------------------------------------- Backup
+  /api/backup/export:
+    get:
+      tags: [Backup]
+      summary: Export a full-instance backup archive
+      description: |
+        Requires the `backup.manage` permission. Streams a ZIP containing a
+        `manifest.json`, one `{table}.json` per table (displays, themes,
+        media_assets, bible_bookmarks, roles, users), and the raw bytes of
+        every media asset under `media/`. Song/SongSet are never included —
+        they're always re-synced from SongbookPro. The `users` table
+        includes bcrypt password hashes (never plaintext); treat the
+        downloaded file with the same care as a database dump.
+      responses:
+        '200':
+          description: ZIP archive
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/backup/import:
+    post:
+      tags: [Backup]
+      summary: Restore a previously exported backup archive
+      description: |
+        Requires the `backup.manage` permission. Meant for restoring into an
+        empty/fresh install: `Role`/`User` are matched by name/email and
+        reused rather than duplicated on a repeat import, but
+        `Display`/`Theme`/`MediaAsset`/`BibleBookmark` are always created
+        fresh and will duplicate on a repeat import.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/BackupImportResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: PHPSESSID
+
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    q:
+      name: q
+      in: query
+      schema: { type: string }
+      description: Free-text search filter.
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 50 }
+    offset:
+      name: offset
+      in: query
+      schema: { type: integer, default: 0 }
+
+  responses:
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Forbidden — the current session doesn't hold the required permission
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnprocessableEntity:
+      description: Validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      description: |
+        Not full RFC 7807 — consistently `title`/`status`, with `detail` set
+        for 403/422 responses. No `type`/`instance` fields, and the
+        `Content-Type` stays `application/json` (not `application/problem+json`).
+      properties:
+        title: { type: string }
+        detail: { type: string }
+        status: { type: integer }
+      required: [title, status]
+
+    SyncResult:
+      type: object
+      properties:
+        created: { type: integer }
+        updated: { type: integer }
+        unchanged: { type: integer }
+      required: [created, updated, unchanged]
+
+    SongSection:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        position: { type: integer }
+        type:
+          type: string
+          enum: [Verse, Chorus, Bridge, Instrumental, Ending, Tag, PreChorus, Custom]
+        label: { type: string, nullable: true }
+        content: { type: string }
+      required: [id, position, type, content]
+
+    Song:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        externalId: { type: string, description: SongbookPro's own song id — the sync key. }
+        title: { type: string }
+        authors: { type: array, items: { type: string } }
+        copyright: { type: string, nullable: true }
+        ccli: { type: string, nullable: true }
+        defaultKey: { type: string, nullable: true }
+        tempo: { type: integer, nullable: true }
+        capo: { type: integer, nullable: true }
+        tags: { type: array, items: { type: string } }
+        format:
+          type: string
+          enum: [OpenLyrics, ChordPro, PlainText]
+        sections:
+          type: array
+          items: { $ref: '#/components/schemas/SongSection' }
+        syncedAt: { type: string, format: date-time }
+      required: [id, externalId, title, authors, tags, format, sections, syncedAt]
+
+    SongSetItem:
+      type: object
+      description: |
+        Only knows the referenced song by its SongbookPro external id
+        (§17.1); `songTitle`/`songDefaultKey` are resolved and denormalized
+        onto the DTO by the caller for display convenience and may be null
+        if the song isn't (yet) synced locally.
+      properties:
+        id: { type: string, format: uuid }
+        songExternalId: { type: string }
+        position: { type: integer }
+        transposedKey: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        songTitle: { type: string, nullable: true }
+        songDefaultKey: { type: string, nullable: true }
+      required: [id, songExternalId, position]
+
+    SongSet:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        externalId: { type: string }
+        name: { type: string }
+        serviceDate: { type: string, format: date-time, nullable: true }
+        notes: { type: string, nullable: true }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SongSetItem' }
+        syncedAt: { type: string, format: date-time }
+      required: [id, externalId, name, items, syncedAt]
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        roleIds:
+          type: array
+          items: { type: string, format: uuid }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+      required: [id, email, displayName, roleIds, isActive, createdAt]
+
+    Role:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+      required: [id, name, permissions]
+
+    DisplaySettings:
+      type: object
+      properties:
+        theme: { type: string, nullable: true }
+        safeAreaPercent: { type: integer }
+        fontScale: { type: number }
+        showLowerThird: { type: boolean }
+        watermarkText: { type: string, nullable: true }
+
+    Display:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        role:
+          type: string
+          enum: [main, stage, lobby]
+        settings: { $ref: '#/components/schemas/DisplaySettings' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, name, role, settings, createdAt, updatedAt]
+
+    DisplayInput:
+      type: object
+      required: [name, role]
+      properties:
+        name: { type: string }
+        role:
+          type: string
+          enum: [main, stage, lobby]
+        settings: { $ref: '#/components/schemas/DisplaySettings' }
+
+    Slide:
+      type: object
+      properties:
+        lines: { type: array, items: { type: string } }
+        sectionType: { type: string, nullable: true }
+        sectionLabel: { type: string, nullable: true }
+      required: [lines]
+
+    SlideDeck:
+      type: object
+      properties:
+        sourceType: { type: string }
+        sourceId: { type: string, nullable: true }
+        slides:
+          type: array
+          items: { $ref: '#/components/schemas/Slide' }
+      required: [sourceType, slides]
+
+    PresentationSession:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        currentDeck:
+          allOf: [{ $ref: '#/components/schemas/SlideDeck' }]
+          nullable: true
+        currentSlideIndex: { type: integer }
+        isBlanked: { type: boolean }
+        isFrozen: { type: boolean }
+        lyricsHidden: { type: boolean }
+        fontSizeAdjust: { type: integer }
+        emergencyMessage: { type: string, nullable: true }
+        updatedAt: { type: string, format: date-time }
+      required: [id, currentSlideIndex, isBlanked, isFrozen, lyricsHidden, fontSizeAdjust, updatedAt]
+
+    MediaAsset:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        filename: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        kind:
+          type: string
+          enum: [image, video, audio, other]
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
+        uploadedAt: { type: string, format: date-time }
+      required: [id, filename, mimeType, sizeBytes, kind, uploadedAt]
+
+    Theme:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        scope:
+          type: string
+          enum: [global, song, section]
+        songExternalId: { type: string, nullable: true }
+        sectionType: { type: string, nullable: true }
+        backgroundColor: { type: string, nullable: true }
+        backgroundMediaAssetId: { type: string, nullable: true, format: uuid }
+        fontFamily: { type: string, nullable: true }
+        fontColor: { type: string, nullable: true }
+        fontSizeScale: { type: number }
+        textAlign:
+          type: string
+          enum: [left, center, right]
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, name, scope, fontSizeScale, textAlign, createdAt, updatedAt]
+
+    ThemeInput:
+      type: object
+      required: [name, scope]
+      properties:
+        name: { type: string }
+        scope:
+          type: string
+          enum: [global, song, section]
+        songExternalId: { type: string, nullable: true }
+        sectionType: { type: string, nullable: true }
+        backgroundColor: { type: string, nullable: true }
+        backgroundMediaAssetId: { type: string, nullable: true, format: uuid }
+        fontFamily: { type: string, nullable: true }
+        fontColor: { type: string, nullable: true }
+        fontSizeScale: { type: number, default: 1.0 }
+        textAlign:
+          type: string
+          enum: [left, center, right]
+          default: center
+
+    BibleTranslation:
+      type: object
+      properties:
+        providerId: { type: string }
+        id: { type: string }
+        name: { type: string }
+        abbreviation: { type: string }
+        language: { type: string }
+      required: [providerId, id, name, abbreviation, language]
+
+    BibleVerse:
+      type: object
+      properties:
+        book: { type: string }
+        chapter: { type: integer }
+        verse: { type: integer }
+        text: { type: string }
+      required: [book, chapter, verse, text]
+
+    BiblePassage:
+      type: object
+      properties:
+        book: { type: string }
+        chapter: { type: integer }
+        verses:
+          type: array
+          items: { $ref: '#/components/schemas/BibleVerse' }
+      required: [book, chapter, verses]
+
+    BibleBookmark:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        translationId: { type: string }
+        book: { type: string }
+        chapter: { type: integer }
+        startVerse: { type: integer, nullable: true }
+        endVerse: { type: integer, nullable: true }
+        label: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, translationId, book, chapter, createdAt]
+
+    BackupImportResult:
+      type: object
+      properties:
+        displaysImported: { type: integer }
+        themesImported: { type: integer }
+        mediaAssetsImported: { type: integer }
+        mediaAssetsSkipped: { type: integer }
+        bibleBookmarksImported: { type: integer }
+        rolesImported: { type: integer }
+        rolesReused: { type: integer }
+        usersImported: { type: integer }
+        usersSkipped: { type: integer }
+      required:
+        - displaysImported
+        - themesImported
+        - mediaAssetsImported
+        - mediaAssetsSkipped
+        - bibleBookmarksImported
+        - rolesImported
+        - rolesReused
+        - usersImported
+        - usersSkipped
+
+security:
+  - sessionCookie: []

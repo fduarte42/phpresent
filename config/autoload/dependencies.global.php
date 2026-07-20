@@ -26,6 +26,8 @@ use Phpresent\Identity\Presentation\Console\CreateAdminCommand;
 use Phpresent\Identity\Presentation\Http\Handler\LoginPageHandler;
 use Phpresent\Identity\Presentation\Http\Handler\UsersIndexPageHandler;
 use Phpresent\Shared\Presentation\Http\Handler\DashboardPageHandler;
+use Phpresent\Shared\Presentation\Http\Handler\OpenApiDocsHandler;
+use Phpresent\Shared\Presentation\Http\Handler\OpenApiSpecHandler;
 use Phpresent\Media\Application\Service\MediaStorageInterface;
 use Phpresent\Media\Domain\Repository\MediaAssetRepositoryInterface;
 use Phpresent\Media\Infrastructure\Flysystem\FlysystemMediaStorage;
@@ -188,6 +190,10 @@ return [
                 return new RateLimiter($rate);
             },
 
+            OpenApiSpecHandler::class => static fn (): OpenApiSpecHandler => new OpenApiSpecHandler(
+                dirname(__DIR__, 2) . '/docs/openapi.yaml',
+            ),
+
             StaticAccessTokenProvider::class => static function (ContainerInterface $container): StaticAccessTokenProvider {
                 $config = $container->get('config');
 
@@ -327,6 +333,8 @@ return [
             ExportBackupHttpHandler::class => ReflectionBasedAbstractFactory::class,
             ImportBackupHttpHandler::class => ReflectionBasedAbstractFactory::class,
             BackupPageHandler::class => ReflectionBasedAbstractFactory::class,
+
+            OpenApiDocsHandler::class => ReflectionBasedAbstractFactory::class,
 
             ListTranslationsHandler::class => ReflectionBasedAbstractFactory::class,
             SearchBibleHttpHandler::class => ReflectionBasedAbstractFactory::class,

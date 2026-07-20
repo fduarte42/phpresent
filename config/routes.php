@@ -16,6 +16,8 @@ use Phpresent\Identity\Presentation\Http\Handler\LoginPageHandler;
 use Phpresent\Identity\Presentation\Http\Handler\LogoutHandler;
 use Phpresent\Identity\Presentation\Http\Handler\UsersIndexPageHandler;
 use Phpresent\Shared\Presentation\Http\Handler\DashboardPageHandler;
+use Phpresent\Shared\Presentation\Http\Handler\OpenApiDocsHandler;
+use Phpresent\Shared\Presentation\Http\Handler\OpenApiSpecHandler;
 use Phpresent\Media\Presentation\Http\Handler\DeleteMediaAssetHandler;
 use Phpresent\Media\Presentation\Http\Handler\DownloadMediaAssetHandler;
 use Phpresent\Media\Presentation\Http\Handler\GetMediaAssetHandler;
@@ -136,4 +138,7 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
     $app->get('/backup', BackupPageHandler::class, 'backup.index');
     $app->get('/api/backup/export', ExportBackupHandler::class, 'api.backup.export');
     $app->post('/api/backup/import', ImportBackupHandler::class, 'api.backup.import');
+
+    $app->get('/api/openapi.json', OpenApiSpecHandler::class, 'api.openapi.spec');
+    $app->get('/api/docs', OpenApiDocsHandler::class, 'api.openapi.docs');
 };

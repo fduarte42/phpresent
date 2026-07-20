@@ -693,9 +693,8 @@ documented here in the same style before each is implemented.
 | POST | `/api/songs/sync` | trigger a foreground sync pass (admin-only) |
 
 All endpoints return `application/json`; errors use RFC 7807 problem
-details via `mezzio/mezzio-problem-details`. OpenAPI document to be
-generated once the API surface stabilizes past this first module (tracked
-in roadmap).
+details via `mezzio/mezzio-problem-details`. The full REST surface across
+every module is now documented in a hand-written OpenAPI spec — see §24.
 
 ## 11. Frontend
 
@@ -973,7 +972,13 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   exported a backup, wiped the dev database back to a fresh migration,
   bootstrapped a new admin, imported the archive, and confirmed all three
   entities reappeared correctly in the UI.
-- ⏳ OpenAPI generation, full REST surface
+- ✅ OpenAPI generation, full REST surface — twelfth increment (§24). A
+  hand-written `docs/openapi.yaml` covering every `/api/*` endpoint plus
+  `/login`/`/logout`/`/sse/{displayId}` (32 paths), served as JSON and
+  browsable via a Swagger UI page. Manually verified: fetched
+  `/api/openapi.json`, confirmed it parses back to the same 32 paths, and
+  loaded `/api/docs` in a real browser, expanding an endpoint to confirm
+  Swagger UI renders its parameters/schema correctly from the served spec.
 
 Each future increment adds its design to this document (architecture,
 schema, entities, repository interfaces, services, DTOs, endpoints, Vue
@@ -2149,3 +2154,71 @@ OpenLyrics/PDF export were explicitly scoped out of this increment (see
 §15's roadmap entry) — they're per-song interchange formats, not part of
 "back up and restore this instance," and would need their own design
 against the Song module.
+
+## 24. OpenAPI Documentation (twelfth increment)
+
+The last roadmap item (§15): document the full REST surface built up
+across the previous eleven increments. Scoped to a hand-written
+`docs/openapi.yaml` rather than annotation-based generation
+(`zircote/swagger-php` or similar) — retrofitting `#[OA\...]` attributes
+onto ~35 existing handler classes across eight modules is a much larger,
+more invasive diff than writing the spec directly from what those
+handlers already do, and this codebase's own documentation convention
+(this SDD itself) is hand-written prose kept in sync by discipline, not
+generated from code. The tradeoff, stated plainly: nothing enforces the
+spec stays in sync with the handlers going forward the way attributes
+co-located with the code would.
+
+### 24.1 Coverage
+
+Every `/api/*` route in `config/routes.php`, plus `/login`, `/logout`,
+and `/sse/{displayId}` — 32 paths across Songs, Song Sets, Identity,
+Displays, Presentation, Media, Themes, Bible, and Backup. Deliberately
+excludes the Inertia page routes (`/songs`, `/displays`, `/backup`, ...)
+— those render Vue pages, not a JSON API, and aren't part of "the REST
+surface." Request/response shapes were taken directly from each
+handler's actual `JsonResponse(...)` calls and DTO constructor
+signatures, not from this document's own (sometimes idealized) prose —
+notably, the error shape documented in `components.schemas.Error` is
+`{title, detail?, status}`, which is what every handler actually returns
+today, not full RFC 7807 (`mezzio/mezzio-problem-details` is a
+dependency, §3, but no handler in this codebase currently emits its
+`type`/`instance` fields — §10's original text overstated this before
+this increment corrected it).
+
+### 24.2 Serving
+
+- `Shared\Presentation\Http\Handler\OpenApiSpecHandler` (`GET
+  /api/openapi.json`) — parses `docs/openapi.yaml` with
+  `symfony/yaml` and returns it as JSON on every request (not cached;
+  this is low-traffic developer tooling, not a hot path). The file path
+  is injected via a scalar-config factory in
+  `dependencies.global.php`, the same pattern `Filesystem::class` and
+  `SimpleCacheInterface::class` already use for config-derived services
+  (§16.1).
+- `Shared\Presentation\Http\Handler\OpenApiDocsHandler` (`GET
+  /api/docs`) — a static HTML page loading the `swagger-ui-dist` bundle
+  from a CDN and pointing it at `/api/openapi.json`. Deliberately plain
+  HTML, not an Inertia/Vue page (`InertiaResponseFactory`, §16.3) — this
+  is developer-facing tooling standing outside the operator-facing app
+  the rest of the frontend serves, so it doesn't need Vue, the shared
+  layout, or a build step.
+
+### 24.3 Manual verification
+
+Booted the app, fetched `GET /api/openapi.json` and confirmed it returns
+`200` with 32 top-level paths and `openapi: "3.0.3"`. Loaded `GET
+/api/docs` in a real browser: the Swagger UI page rendered every
+tag/endpoint group, and expanding `GET /api/songs/{id}` showed its `id`
+path parameter (`string($uuid)`, required) rendered correctly from the
+served schema — confirming Swagger UI successfully parsed the spec end
+to end, not just that the YAML is syntactically valid in isolation.
+
+### 24.4 What's still not built, and why
+
+No request/response validation middleware generated from the spec (e.g.
+rejecting a malformed body before it reaches a handler) — the spec is
+documentation only in this increment. Wiring `cebe/php-openapi` or
+similar for runtime validation is a distinct feature with its own
+performance/error-shape tradeoffs, not a natural extension of "document
+what already exists."
