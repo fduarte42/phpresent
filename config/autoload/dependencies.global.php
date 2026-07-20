@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use Doctrine\Migrations\Configuration\EntityManager\ExistingEntityManager;
+use Doctrine\Migrations\Configuration\Migration\PhpFile;
+use Doctrine\Migrations\DependencyFactory;
 use Doctrine\ORM\EntityManager;
 use Doctrine\ORM\EntityManagerInterface;
 use GuzzleHttp\Client as GuzzleClient;
@@ -193,6 +196,18 @@ return [
             OpenApiSpecHandler::class => static fn (): OpenApiSpecHandler => new OpenApiSpecHandler(
                 dirname(__DIR__, 2) . '/docs/openapi.yaml',
             ),
+
+            // Backs every `migrations:*` console command (registered via
+            // `config/autoload/cli.global.php`'s `laminas-cli.commands`
+            // map) — replaces the standalone `cli-config.php` that used to
+            // drive a separate `vendor/bin/doctrine-migrations` process
+            // with its own container build.
+            DependencyFactory::class => static function (ContainerInterface $container): DependencyFactory {
+                return DependencyFactory::fromEntityManager(
+                    new PhpFile(dirname(__DIR__, 2) . '/config/migrations.php'),
+                    new ExistingEntityManager($container->get(EntityManagerInterface::class)),
+                );
+            },
 
             StaticAccessTokenProvider::class => static function (ContainerInterface $container): StaticAccessTokenProvider {
                 $config = $container->get('config');

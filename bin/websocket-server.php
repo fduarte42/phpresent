@@ -7,8 +7,8 @@ declare(strict_types=1);
  * Standalone WebSocket server for the Presentation module (SDD §7.5/§13).
  * A separate OS process from the Mezzio HTTP app — sharing the same
  * Doctrine EntityManager config (this script builds the same DI container
- * `config/container.php` builds for the HTTP app and `cli-config.php`
- * builds for migrations), but not the Mezzio HTTP pipeline.
+ * `config/container.php` builds for the HTTP app and `bin/console.php`
+ * builds for CLI commands, §16.9), but not the Mezzio HTTP pipeline.
  *
  * Run with: php bin/websocket-server.php (or `composer serve:websocket`).
  */

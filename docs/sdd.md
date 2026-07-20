@@ -797,7 +797,8 @@ already isolate "how do I learn about a change" behind one method.
 
 `bin/websocket-server.php` runs as its own process, sharing the Doctrine
 EntityManager config (via `config/container.php`, same container the HTTP
-app and `cli-config.php` build) but not the Mezzio HTTP pipeline. It hosts
+app and `bin/console.php`, §16.9, build) but not the Mezzio HTTP pipeline.
+It hosts
 `PresentationChannel` (a Ratchet `MessageComponentInterface`): `onOpen`
 sends the connecting client the current session state immediately; a
 ReactPHP periodic timer calls `poll()`, which broadcasts to every
@@ -1028,8 +1029,10 @@ explicit `paths` array to `ORMSetup::createAttributeMetadataConfiguration()`
 these paths (no error, the table just never gets created/mapped). **Every
 new module that adds `#[ORM\Entity]` classes must add its own entity
 directory to this array**, and add the corresponding path list to any test
-that builds its own `EntityManager` (see 16.4) and to `cli-config.php`'s
-indirect dependency on the same factory.
+that builds its own `EntityManager` (see 16.4) — the `migrations:*`
+console commands (§16.9) share this same factory indirectly, through the
+`EntityManagerInterface` service `DependencyFactory::class` depends on, so
+they're covered automatically.
 
 ### 16.3 Inertia adapter is hand-rolled, not a package
 
@@ -1205,6 +1208,36 @@ wiring (16.1), routes in `config/routes.php`, an SDD section (schema,
 entities, DTOs, endpoints — following the style of §4–§11) added *before*
 the code per the project's delivery convention, `test/Support/` fakes for
 any new interfaces (16.4), and a roadmap line moved from ⏳ to ✅ in §15.
+
+### 16.9 The console entry point is a laminas-cli application
+
+`bin/console.php` is not a hand-rolled `Symfony\Component\Console\
+Application` with commands added one at a time via `->add(...)` (that was
+the original shape, before this convention existed) — it's built from
+`laminas/laminas-cli`'s `ApplicationFactory` + `ApplicationProvisioner`,
+the same two calls `vendor/bin/laminas --container=config/container.php`
+makes internally. Every command it can run is declared once, as a
+`'laminas-cli' => ['commands' => ['name' => Class::class]]` map in
+`config/autoload/cli.global.php`, and resolved lazily from the app's own
+DI container (`config/container.php`) the first time it's actually
+invoked — same container, same `ReflectionBasedAbstractFactory` catch-all
+(16.1) that resolves every HTTP handler. Adding a new command is just
+adding one line to that map (plus a factory in `dependencies.global.php`
+only if the command's constructor needs something the container can't
+already resolve reflectively, e.g. a scalar).
+
+Doctrine Migrations used to run through its own separate binary
+(`vendor/bin/doctrine-migrations`), driven by a `cli-config.php` at the
+project root that built a *second*, parallel container just for that one
+tool. That file is gone: `Doctrine\Migrations\DependencyFactory` is now a
+container service (`dependencies.global.php`, built via
+`DependencyFactory::fromEntityManager()` against the same
+`EntityManagerInterface` the HTTP app uses), and all thirteen
+`migrations:*` commands are just more entries in the `cli.global.php` map
+— `php bin/console.php migrations:migrate` replaces `vendor/bin/
+doctrine-migrations migrate`, and `composer migrate` was repointed to
+match. Run `php bin/console.php list` to see every registered command,
+across both families, in one place.
 
 ## 17. SongSet Module (second increment)
 

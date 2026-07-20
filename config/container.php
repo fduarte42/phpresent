@@ -19,6 +19,9 @@ $aggregator = new ConfigAggregator([
         require __DIR__ . '/autoload/dependencies.global.php'
     ),
     new ArrayProvider(
+        require __DIR__ . '/autoload/cli.global.php'
+    ),
+    new ArrayProvider(
         require __DIR__ . '/autoload/songbookpro.global.php'
     ),
     new ArrayProvider(
