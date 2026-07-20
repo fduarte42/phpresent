@@ -55,6 +55,7 @@ use Phpresent\Shared\Infrastructure\Http\InertiaResponseFactory;
 use Phpresent\Shared\Infrastructure\Persistence\DoctrineAuditLogger;
 use Phpresent\Shared\Infrastructure\Persistence\DoctrineSyncStateRepository;
 use Phpresent\Shared\Infrastructure\Persistence\EntityManagerFactory;
+use Phpresent\Shared\Infrastructure\Plugin\PluginRegistry;
 use Phpresent\SongbookPro\Domain\Service\AccessTokenProviderInterface;
 use Phpresent\SongbookPro\Infrastructure\Security\StaticAccessTokenProvider;
 use Phpresent\Song\Application\Query\SearchSongsHandler;
@@ -72,6 +73,15 @@ use Phpresent\Song\Presentation\Http\Handler\SyncSongsHandler as SyncSongsHttpHa
 use Phpresent\SongbookPro\Infrastructure\GraphQL\GraphQLClientInterface;
 use Phpresent\SongbookPro\Infrastructure\GraphQL\RateLimiter;
 use Phpresent\SongbookPro\Infrastructure\GraphQL\SongbookProGraphQLClient;
+use Phpresent\Bible\Domain\Repository\BibleBookmarkRepositoryInterface;
+use Phpresent\Bible\Infrastructure\Persistence\DoctrineBibleBookmarkRepository;
+use Phpresent\Bible\Presentation\Http\Handler\BibleIndexPageHandler;
+use Phpresent\Bible\Presentation\Http\Handler\CreateBookmarkHandler as CreateBookmarkHttpHandler;
+use Phpresent\Bible\Presentation\Http\Handler\DeleteBookmarkHandler;
+use Phpresent\Bible\Presentation\Http\Handler\GetPassageHandler;
+use Phpresent\Bible\Presentation\Http\Handler\ListBookmarksHandler as ListBookmarksHttpHandler;
+use Phpresent\Bible\Presentation\Http\Handler\ListTranslationsHandler;
+use Phpresent\Bible\Presentation\Http\Handler\SearchBibleHandler as SearchBibleHttpHandler;
 use Phpresent\Theme\Domain\Repository\ThemeRepositoryInterface;
 use Phpresent\Theme\Infrastructure\Persistence\DoctrineThemeRepository;
 use Phpresent\Theme\Presentation\Http\Handler\CreateThemeHandler as CreateThemeHttpHandler;
@@ -110,11 +120,23 @@ return [
             MediaStorageInterface::class => FlysystemMediaStorage::class,
             FilesystemOperator::class => Filesystem::class,
             ThemeRepositoryInterface::class => DoctrineThemeRepository::class,
+            BibleBookmarkRepositoryInterface::class => DoctrineBibleBookmarkRepository::class,
         ],
         'factories' => [
             EntityManager::class => EntityManagerFactory::class,
 
             GuzzleClient::class => static fn (): GuzzleClient => new GuzzleClient(),
+
+            PluginRegistry::class => static function (ContainerInterface $container): PluginRegistry {
+                $config = $container->get('config');
+                /** @var list<class-string<\Phpresent\Shared\Domain\Plugin\PluginInterface>> $pluginClasses */
+                $pluginClasses = $config['plugins'] ?? [];
+
+                return new PluginRegistry(array_map(
+                    static fn (string $class) => $container->get($class),
+                    $pluginClasses,
+                ));
+            },
 
             Filesystem::class => static function (ContainerInterface $container): Filesystem {
                 $config = $container->get('config');
@@ -287,6 +309,14 @@ return [
             UpdateThemeHttpHandler::class => ReflectionBasedAbstractFactory::class,
             DeleteThemeHandler::class => ReflectionBasedAbstractFactory::class,
             ThemesIndexPageHandler::class => ReflectionBasedAbstractFactory::class,
+
+            ListTranslationsHandler::class => ReflectionBasedAbstractFactory::class,
+            SearchBibleHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            GetPassageHandler::class => ReflectionBasedAbstractFactory::class,
+            ListBookmarksHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            CreateBookmarkHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            DeleteBookmarkHandler::class => ReflectionBasedAbstractFactory::class,
+            BibleIndexPageHandler::class => ReflectionBasedAbstractFactory::class,
 
             UploadMediaAssetHttpHandler::class => static function (
                 ContainerInterface $container,

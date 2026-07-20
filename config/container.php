@@ -25,6 +25,9 @@ $aggregator = new ConfigAggregator([
         require __DIR__ . '/autoload/websocket.global.php'
     ),
     new ArrayProvider(
+        require __DIR__ . '/plugins.php'
+    ),
+    new ArrayProvider(
         require (file_exists(__DIR__ . '/autoload/local.php')
             ? __DIR__ . '/autoload/local.php'
             : __DIR__ . '/autoload/local.php.dist')

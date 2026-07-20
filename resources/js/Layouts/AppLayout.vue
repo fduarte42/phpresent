@@ -14,6 +14,7 @@ const navLinks = [
     { href: '/presentation', label: 'Live Control' },
     { href: '/media', label: 'Media' },
     { href: '/themes', label: 'Themes' },
+    { href: '/bible', label: 'Bible' },
 ];
 </script>
 

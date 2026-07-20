@@ -30,6 +30,13 @@ use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlPageHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationSseHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\UpdateDisplayHandler;
+use Phpresent\Bible\Presentation\Http\Handler\BibleIndexPageHandler;
+use Phpresent\Bible\Presentation\Http\Handler\CreateBookmarkHandler;
+use Phpresent\Bible\Presentation\Http\Handler\DeleteBookmarkHandler;
+use Phpresent\Bible\Presentation\Http\Handler\GetPassageHandler;
+use Phpresent\Bible\Presentation\Http\Handler\ListBookmarksHandler;
+use Phpresent\Bible\Presentation\Http\Handler\ListTranslationsHandler;
+use Phpresent\Bible\Presentation\Http\Handler\SearchBibleHandler;
 use Phpresent\Theme\Presentation\Http\Handler\CreateThemeHandler;
 use Phpresent\Theme\Presentation\Http\Handler\DeleteThemeHandler;
 use Phpresent\Theme\Presentation\Http\Handler\GetThemeHandler;
@@ -105,4 +112,13 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
     $app->post('/api/themes', CreateThemeHandler::class, 'api.themes.create');
     $app->patch('/api/themes/{id}', UpdateThemeHandler::class, 'api.themes.update');
     $app->delete('/api/themes/{id}', DeleteThemeHandler::class, 'api.themes.delete');
+
+    $app->get('/bible', BibleIndexPageHandler::class, 'bible.index');
+
+    $app->get('/api/bible/translations', ListTranslationsHandler::class, 'api.bible.translations');
+    $app->get('/api/bible/search', SearchBibleHandler::class, 'api.bible.search');
+    $app->get('/api/bible/passage', GetPassageHandler::class, 'api.bible.passage');
+    $app->get('/api/bible/bookmarks', ListBookmarksHandler::class, 'api.bible.bookmarks.list');
+    $app->post('/api/bible/bookmarks', CreateBookmarkHandler::class, 'api.bible.bookmarks.create');
+    $app->delete('/api/bible/bookmarks/{id}', DeleteBookmarkHandler::class, 'api.bible.bookmarks.delete');
 };

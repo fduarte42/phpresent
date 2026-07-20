@@ -735,17 +735,27 @@ provider and navigation, reused by all future pages. A Pinia
   `websocket.host` from config — that config value is typically `0.0.0.0`
   (a bind address, not something a browser can connect to).
 
-## 12. Plugin Architecture (planned)
+## 12. Plugin Architecture (foundation implemented, ninth increment)
 
-`PluginInterface` (Domain-facing, in `Shared\Domain`) with narrow
-capability interfaces a plugin may additionally implement:
-`BibleProviderInterface`, `MediaProviderInterface`, `ExporterInterface`,
-`ImporterInterface`, `PresentationWidgetInterface`, `RemoteDeviceInterface`.
-A `PluginRegistry` (Infrastructure) discovers plugins from
-`config/plugins.php` (explicit registration — no filesystem scanning/magic,
-for predictability and security) and binds them into the ServiceManager.
-OBS/MIDI/StreamDeck/NDI/DMX integrations are first-class plugins using these
-same interfaces, not special-cased core code.
+`PluginInterface` (`Shared\Domain\Plugin\PluginInterface` — `id()`/`name()`)
+with narrow capability interfaces a plugin may additionally implement.
+Only `BibleProviderInterface` (`Shared\Domain\Plugin\Bible`) exists so far,
+built alongside the Bible module (§21) as its first real consumer, rather
+than speculatively building `MediaProviderInterface`/`ExporterInterface`/
+`ImporterInterface`/`PresentationWidgetInterface`/`RemoteDeviceInterface`
+with no plugin to implement them yet — same YAGNI reasoning as everywhere
+else in this codebase (e.g. `SlideSourceType` only having `Song`/`Blank`
+cases, §7.1). Add each capability interface when a real plugin needs it.
+
+`PluginRegistry` (`Shared\Infrastructure\Plugin\PluginRegistry`) discovers
+plugins from `config/plugins.php` (explicit registration — no filesystem
+scanning/magic, for predictability and security) via a DI factory that
+resolves each listed class through the container, then filters by
+capability with a typed accessor per capability (`bibleProviders()`) rather
+than a generic `byCapability(string $interface)` — see the class's own
+docblock for why. OBS/MIDI/StreamDeck/NDI/DMX integrations remain a future
+capability interface each, not special-cased core code, once one is
+actually being built.
 
 ## 13. Realtime Transport
 
@@ -919,8 +929,19 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   browser across all three scopes including the invariant validation path.
   ⏳ Not wired into `SlideComposer`/rendering yet — a deliberate scope cut
   (§20), same reasoning as Media's (§19).
-- ⏳ Bible module + provider plugin(s)
-- ⏳ Plugin registry + first-party plugins (OBS, MIDI, StreamDeck, NDI, DMX)
+- ✅ Plugin foundation + Bible module (see §12/§21), built together since
+  Bible is explicitly designed as plugin-based: `PluginInterface`,
+  `BibleProviderInterface`, `PluginRegistry` (discovers from
+  `config/plugins.php`); `LocalBibleProvider` (first real plugin — a small
+  bundled public-domain KJV excerpt, not a live API, per §21's own
+  reasoning) providing search/passage lookup across a handful of
+  well-known passages; `BibleBookmark` (Phpresent's own persisted data —
+  never the scripture text itself, always provider-mediated), CRUD REST +
+  `Bible/Index.vue`, migration, unit + integration tests, manually verified
+  in a real browser (search → load passage → bookmark → remove, each
+  confirmed against server state). ⏳ First-party device plugins (OBS,
+  MIDI, StreamDeck, NDI, DMX) remain future capability interfaces with no
+  implementation yet.
 - ⏳ Admin UI (dashboard, users, roles, displays, themes, media, logs, jobs,
   sync, cache)
 - ⏳ Import/export (OpenLyrics, PDF, JSON/ZIP backup)
@@ -1793,3 +1814,103 @@ store just throws a generic message) — worth doing here specifically
 because the Domain invariant errors (§20.1) are the one case in this
 module where the *server's* validation message is actually informative to
 show the user, not just "request failed."
+
+## 21. Bible Module (ninth increment)
+
+"Plugin-based translation providers, search, presentation" (§2). Built
+together with the Plugin foundation (§12) since Bible has no meaning
+without a provider — see §12 for `PluginInterface`/`BibleProviderInterface`/
+`PluginRegistry`, and `LocalBibleProvider`'s own docblock
+(`src/Bible/Infrastructure/Plugin/LocalBibleProvider.php`) for why its data
+is a small bundled KJV excerpt rather than a live API integration. Scoped
+to search/passage/bookmark storage + REST + UI only — wiring a passage into
+`SlideComposer`/live presentation is left for a follow-up, same cut as
+Media (§19) and Theme (§20).
+
+### 21.1 Domain Model
+
+Phpresent never stores scripture text itself — that always comes from a
+`BibleProviderInterface` plugin (§12). The only thing the Bible module
+persists is a **pointer** to a passage, for quick recall during a service:
+
+```
+BibleBookmark (aggregate root)
+ ├─ id: BibleBookmarkId (UUIDv4)
+ ├─ translationId: string      // scoped to whichever provider owns it
+ ├─ book: string
+ ├─ chapter: int
+ ├─ startVerse: ?int
+ ├─ endVerse: ?int
+ ├─ label: ?string             // e.g. "Sermon text"
+ └─ createdAt: DateTimeImmutable
+```
+
+Immutable once created — same reasoning as `MediaAsset` (§19): no
+partial-edit use case, remove and re-create instead.
+
+### 21.2 Application Layer
+
+- `ListBibleTranslationsQuery`/`Handler`, `SearchBibleQuery`/`Handler`,
+  `GetBiblePassageQuery`/`Handler` — none of these talk to a repository;
+  they fan out across `PluginRegistry::bibleProviders()` instead.
+  **Translations**: every provider's `translations()` list is merged and
+  tagged with `providerId`, since more than one provider can be registered
+  at once. **Search/passage**: every registered provider is asked in turn
+  with the given `translationId`; each provider is responsible for
+  recognizing its own translation ids and returning nothing (`[]` /
+  `null`) otherwise (part of `BibleProviderInterface`'s contract, §12), so
+  no separate translationId-to-provider routing table exists at this
+  layer — the first non-empty/non-null answer wins.
+- `CreateBookmarkCommand`/`Handler`, `RemoveBookmarkCommand`/`Handler`,
+  `ListBookmarksQuery`/`Handler` — plain CRUD against
+  `BibleBookmarkRepositoryInterface`, same shape as every other module (§5).
+  No validation that `translationId`/`book`/`chapter` correspond to a real,
+  currently-resolvable passage — same reasoning as `SongSetItem`'s
+  unsynced-song tolerance (§17.1): a bookmark can legitimately reference
+  something not available right now (a provider that's since been
+  unregistered, for instance) without that being an error.
+
+### 21.3 Database Schema
+
+```sql
+CREATE TABLE bible_bookmarks (
+    id                CHAR(36) PRIMARY KEY,
+    translation_id    VARCHAR(64) NOT NULL,
+    book              VARCHAR(191) NOT NULL,
+    chapter           INTEGER NOT NULL,
+    start_verse       INTEGER,
+    end_verse         INTEGER,
+    label             VARCHAR(191),
+    created_at        DATETIME NOT NULL
+);
+```
+
+### 21.4 REST API
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/bible/translations` | merged translation list across all registered providers |
+| GET | `/api/bible/search` | `?translationId=&q=&limit=` |
+| GET | `/api/bible/passage` | `?translationId=&book=&chapter=&startVerse=&endVerse=` |
+| GET | `/api/bible/bookmarks` | list saved bookmarks |
+| POST | `/api/bible/bookmarks` | save a bookmark |
+| DELETE | `/api/bible/bookmarks/{id}` | remove a bookmark |
+
+### 21.5 Frontend
+
+`Pages/Bible/Index.vue` — a search box (translation selector +
+debounced query, results clickable to load that verse's full chapter), a
+passage viewer (book/chapter/verse-range inputs + a "Save Bookmark" button
+that appears once a passage is loaded), and a bookmarks list (click to
+reload that passage, confirm-then-remove). `useBibleStore` is the one
+store so far that reads from *two* independent REST resources
+(translations and bookmarks) into one page's initial props, plus two more
+(search, passage) fetched on demand — `setInitial()` seeds both from the
+page handler's props in one call rather than two separate store methods.
+
+Manually verified end-to-end in a real browser: searched "love" (matched
+John 3:16 and Romans 8:28, per `KjvFixtureData`), clicked a result to load
+its full chapter, saved it as a labeled bookmark, confirmed the exact verse
+range persisted server-side via the REST API, and removed the bookmark —
+each step checked against actual server state, not just that the UI looked
+right.
