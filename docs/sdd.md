@@ -424,15 +424,16 @@ re-derive it:
   connection query and will fail against the real endpoint exactly as
   before.
 
-## 7. Presentation Engine (fourth and fifth increments)
+## 7. Presentation Engine (fourth through sixth increments)
 
 The fourth increment implemented the Display registry, `SlideComposer`
 pipeline, and `PresentationSession` live-control commands below, through
 Doctrine persistence and a REST API. The fifth increment added the realtime
 transport (§7.5/§13): the WebSocket server and SSE fallback that actually
 push `PresentationSession` state to displays, rather than requiring `GET
-/api/presentation` polling. Only the Vue/Inertia operator UI remains
-undone — see §7.5.
+/api/presentation` polling. The sixth increment added the Vue/Inertia
+operator UI (§7.5/§11) — the Presentation module is now feature-complete
+against §7's original design.
 
 ### 7.1 Domain Model
 
@@ -599,17 +600,29 @@ since CQRS doesn't require a 1:1 route-to-command mapping and eight
 three-line HTTP handler classes would add files without adding behavior.
 Same JSON/RFC 7807 conventions as §10.
 
-### 7.5 Realtime Transport (fifth increment)
+### 7.5 Realtime Transport and Operator UI (fifth and sixth increments)
 
-Implemented: `bin/websocket-server.php` (Ratchet) and `GET
-/sse/{displayId}` (§13 gives the full design and the two real bugs this
-increment's manual verification caught — read that section before touching
-either transport).
+**Realtime transport** (fifth increment): `bin/websocket-server.php`
+(Ratchet) and `GET /sse/{displayId}` (§13 gives the full design and the two
+real bugs this increment's manual verification caught — read that section
+before touching either transport).
 
-**Still not built**: Vue/Inertia UI (display management, live-control
-operator screen) — no admin UI exists yet for the same reason Identity's
-doesn't (§15): there's more value in confirming the transport actually
-pushes state correctly (done, §13) before building a screen on top of it.
+**Operator UI** (sixth increment, §11): `GET /displays` (Displays list +
+inline create form + remove) and `GET /presentation` (the live-control
+screen — song picker, current-slide preview, next/previous, blank/freeze/
+hide-lyrics toggles, font-size adjust, emergency-message banner). The
+control page connects directly to the WebSocket server from the browser
+(`usePresentationStore`, `resources/js/stores/usePresentationStore.ts`),
+falling back to the SSE endpoint if the WebSocket connection fails —
+exercising both transports built in the fifth increment from an actual
+browser, not just `curl`/Node test scripts. Manually verified end-to-end
+(Chrome, via computer-use browser automation): load a song, toggle every
+control, create/remove a display — each REST response and the following
+WebSocket push were both confirmed to update the UI. That pass caught one
+real gap — the emergency-message control set state correctly server-side
+but the page never rendered the active message anywhere, silently
+"working" while being useless to an operator — fixed by adding a banner
+bound to `session.emergencyMessage`.
 
 ## 8. Cross-Cutting Concerns
 
@@ -684,7 +697,7 @@ details via `mezzio/mezzio-problem-details`. OpenAPI document to be
 generated once the API surface stabilizes past this first module (tracked
 in roadmap).
 
-## 11. Frontend (current increment)
+## 11. Frontend
 
 Inertia.js page `resources/js/Pages/Songs/Index.vue` renders a Naive UI
 `n-data-table` of synced songs (title, authors, CCLI, key, tags) with a
@@ -692,6 +705,35 @@ search box bound to `/api/songs?q=`. Layout shell
 (`Layouts/AppLayout.vue`) provides the dark-mode-aware Naive UI theme
 provider and navigation, reused by all future pages. A Pinia
 `useSongsStore` wraps API calls so components stay presentation-only.
+
+### 11.1 Presentation module UI (sixth increment)
+
+- `Pages/Displays/Index.vue` — same list-page shape as `Songs/Index.vue`,
+  plus an inline create form (name + role `n-select`) and a `n-popconfirm`-
+  gated remove action per row. `useDisplaysStore` wraps the CRUD calls.
+- `Pages/Presentation/Control.vue` — the live-control operator screen: a
+  song picker (reuses the `/api/songs` search endpoint directly rather than
+  `useSongsStore`, since that store's state is page-scoped and this page
+  needs its own independent list), a current-slide preview reflecting
+  `isBlanked`/`lyricsHidden`/the active slide's lines, Next/Previous,
+  Blank/Freeze/Hide-Lyrics `n-switch` toggles, a font-size `n-input-number`,
+  and an emergency-message field with a Show/Clear pair — mirroring
+  `PresentationControlHandler`'s `{action, value}` shape exactly (§7.4).
+- `stores/usePresentationStore.ts` — the one store in this codebase that
+  isn't just a `fetch()` wrapper. `connect(wsUrl, displayId)` opens a
+  `WebSocket` to `PresentationChannel`; on `close`/`error` it falls back to
+  `new EventSource('/sse/' + displayId)`. Both paths funnel into the same
+  `session` ref, so `Control.vue` doesn't know or care which transport is
+  live — only `connectionStatus` (`connecting` \| `websocket` \| `sse` \|
+  `offline`), surfaced as a banner, tells the operator which one is active.
+  Deliberately doesn't add a third polling fallback below SSE: SSE already
+  auto-reconnects (`EventSource`'s built-in behavior, matched against the
+  server's bounded stream duration, §13.3), so a third tier would just
+  duplicate what SSE already provides.
+- `PresentationControlPageHandler` (Presentation module, §7.2) computes
+  `wsUrl` server-side from the *inbound request's* host, not
+  `websocket.host` from config — that config value is typically `0.0.0.0`
+  (a bind address, not something a browser can connect to).
 
 ## 12. Plugin Architecture (planned)
 
@@ -856,8 +898,13 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   composer.json) and SSE fallback (`GET /sse/{displayId}`), both DB-poll
   based (§13.1) rather than the originally-sketched Messenger transport,
   manually verified end-to-end (two real bugs found and fixed in the
-  process — §13.2/§13.3). ⏳ Only the Vue/Inertia operator UI remains
-  undone — see §7.5.
+  process — §13.2/§13.3). Vue/Inertia operator UI added in a further
+  follow-up increment (§7.5/§11.1): `Displays/Index.vue` (CRUD) and
+  `Presentation/Control.vue` (live control, connected over WebSocket with
+  an SSE fallback via `usePresentationStore`), manually verified in a real
+  browser — caught and fixed one real gap (emergency message set state
+  correctly but was never rendered anywhere on screen). The Presentation
+  module is now feature-complete against §7's original design.
 - ⏳ Media module (Flysystem-backed assets, video/image/PDF slides)
 - ⏳ Theme engine
 - ⏳ Bible module + provider plugin(s)

@@ -25,12 +25,14 @@ use Phpresent\Presentation\Infrastructure\Persistence\DoctrineDisplayRepository;
 use Phpresent\Presentation\Infrastructure\Persistence\DoctrinePresentationSessionRepository;
 use Phpresent\Presentation\Presentation\Http\Handler\CreateDisplayHandler as CreateDisplayHttpHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\DeleteDisplayHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\DisplaysIndexPageHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\GetDisplayHandler as GetDisplayHttpHandler;
 use Phpresent\Presentation\Application\Query\GetPresentationSessionHandler as GetPresentationSessionQueryHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\GetPresentationSessionHandler as GetPresentationSessionHttpHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\ListDisplaysHandler as ListDisplaysHttpHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\LoadSongIntoPresentationHandler as LoadSongIntoPresentationHttpHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlPageHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationSseHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\UpdateDisplayHandler as UpdateDisplayHttpHandler;
 use Phpresent\Shared\Domain\Audit\AuditLoggerInterface;
@@ -42,6 +44,7 @@ use Phpresent\Shared\Infrastructure\Persistence\DoctrineSyncStateRepository;
 use Phpresent\Shared\Infrastructure\Persistence\EntityManagerFactory;
 use Phpresent\SongbookPro\Domain\Service\AccessTokenProviderInterface;
 use Phpresent\SongbookPro\Infrastructure\Security\StaticAccessTokenProvider;
+use Phpresent\Song\Application\Query\SearchSongsHandler;
 use Phpresent\Song\Application\Service\SongSourceInterface;
 use Phpresent\Song\Domain\Repository\SongRepositoryInterface;
 use Phpresent\Song\Infrastructure\Persistence\DoctrineSongRepository;
@@ -218,6 +221,21 @@ return [
                     entityManager: $container->get(EntityManagerInterface::class),
                     pollIntervalSeconds: (float) ($wsConfig['poll_interval_seconds'] ?? 0.25),
                     maxDurationSeconds: (int) ($wsConfig['sse_max_duration_seconds'] ?? 55),
+                );
+            },
+
+            DisplaysIndexPageHandler::class => ReflectionBasedAbstractFactory::class,
+
+            PresentationControlPageHandler::class => static function (
+                ContainerInterface $container,
+            ): PresentationControlPageHandler {
+                $config = $container->get('config');
+
+                return new PresentationControlPageHandler(
+                    getPresentationSessionHandler: $container->get(GetPresentationSessionQueryHandler::class),
+                    searchSongsHandler: $container->get(SearchSongsHandler::class),
+                    inertia: $container->get(InertiaResponseFactory::class),
+                    websocketPort: (int) ($config['websocket']['port'] ?? 8090),
                 );
             },
         ],

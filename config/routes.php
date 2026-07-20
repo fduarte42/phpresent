@@ -15,11 +15,13 @@ use Phpresent\Identity\Presentation\Http\Handler\LoginHandler;
 use Phpresent\Identity\Presentation\Http\Handler\LogoutHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\CreateDisplayHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\DeleteDisplayHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\DisplaysIndexPageHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\GetDisplayHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\GetPresentationSessionHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\ListDisplaysHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\LoadSongIntoPresentationHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlPageHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationSseHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\UpdateDisplayHandler;
 use Phpresent\Song\Presentation\Http\Handler\GetSongHandler;
@@ -60,6 +62,9 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
 
     $app->get('/api/roles', ListRolesHandler::class, 'api.roles.list');
     $app->post('/api/roles', CreateRoleHandler::class, 'api.roles.create');
+
+    $app->get('/displays', DisplaysIndexPageHandler::class, 'displays.index');
+    $app->get('/presentation', PresentationControlPageHandler::class, 'presentation.control_page');
 
     $app->get('/api/displays', ListDisplaysHandler::class, 'api.displays.list');
     $app->get('/api/displays/{id}', GetDisplayHandler::class, 'api.displays.get');
