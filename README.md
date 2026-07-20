@@ -10,7 +10,7 @@ Built incrementally; `docs/sdd.md` §15 tracks what's implemented vs. planned.
 
 ## Stack
 
-PHP 8.3+ (targeting 8.5 once generally available) · Mezzio · Doctrine ORM 3 ·
+PHP 8.5+ · Mezzio · Doctrine ORM 3 ·
 Symfony Cache/Messenger/Serializer/Validator · Vue 3 + TypeScript · Inertia.js
 · Vite · Naive UI · Pinia. Full list in `docs/sdd.md` §3.
 

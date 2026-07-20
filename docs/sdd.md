@@ -1096,14 +1096,19 @@ version's output path before "fixing" it back.
 
 ### 16.5 PHP version target vs. what's actually installed
 
-The brief specifies PHP 8.5+. `composer.json` currently pins `"php":
-"^8.3"` because PHP 8.5 does not exist in any environment this project has
-been built or run in so far (including this sandbox, which has 8.4.19).
-This is a deliberate, temporary downgrade of the *constraint*, not a scope
-cut — no 8.5-only syntax has been used. Bump the constraint back to `^8.5`
-once a real PHP 8.5 runtime is available to test against; don't do it
-speculatively without verifying `composer install` and the test suite still
-pass under it.
+`composer.json` pins `"php": "^8.5"`, matching the brief's PHP 8.5+
+target. This was a deliberate, temporary downgrade to `^8.3` earlier in
+the project's life, back when no PHP 8.5 runtime existed to build or test
+against (this sandbox itself was on 8.4.19 at the time); it was bumped
+back once a real 8.5 runtime became available here, verified via
+`composer update --lock` (no dependency conflicts, `composer
+check-platform-reqs` reporting `php 8.5.8 success`) and a full green run
+of `composer test`/`composer stan`/`composer cs-check`. `Dockerfile` and
+`.github/workflows/ci.yml` had already been targeting 8.5 for some time
+by this point — only the `composer.json` constraint (and the README's
+stack line) had lagged behind. No 8.5-only syntax is used anywhere in the
+codebase; this was purely a constraint/version-string correction, not a
+code change.
 
 ### 16.6 Sandbox/CI network caveat (not a code bug)
 
