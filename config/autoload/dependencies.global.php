@@ -22,6 +22,10 @@ use Phpresent\Identity\Infrastructure\Security\CompositeAuthenticator;
 use Phpresent\Identity\Infrastructure\Security\JwtAuthenticator;
 use Phpresent\Identity\Infrastructure\Security\PhpPasswordHasher;
 use Phpresent\Identity\Infrastructure\Security\RolePermissionChecker;
+use Phpresent\Identity\Presentation\Console\CreateAdminCommand;
+use Phpresent\Identity\Presentation\Http\Handler\LoginPageHandler;
+use Phpresent\Identity\Presentation\Http\Handler\UsersIndexPageHandler;
+use Phpresent\Shared\Presentation\Http\Handler\DashboardPageHandler;
 use Phpresent\Media\Application\Service\MediaStorageInterface;
 use Phpresent\Media\Domain\Repository\MediaAssetRepositoryInterface;
 use Phpresent\Media\Infrastructure\Flysystem\FlysystemMediaStorage;
@@ -260,6 +264,10 @@ return [
             \Phpresent\Identity\Presentation\Http\Handler\DeactivateUserHandler::class => ReflectionBasedAbstractFactory::class,
             \Phpresent\Identity\Presentation\Http\Handler\ListRolesHandler::class => ReflectionBasedAbstractFactory::class,
             \Phpresent\Identity\Presentation\Http\Handler\CreateRoleHandler::class => ReflectionBasedAbstractFactory::class,
+            LoginPageHandler::class => ReflectionBasedAbstractFactory::class,
+            UsersIndexPageHandler::class => ReflectionBasedAbstractFactory::class,
+            CreateAdminCommand::class => ReflectionBasedAbstractFactory::class,
+            DashboardPageHandler::class => ReflectionBasedAbstractFactory::class,
 
             ListDisplaysHttpHandler::class => ReflectionBasedAbstractFactory::class,
             GetDisplayHttpHandler::class => ReflectionBasedAbstractFactory::class,

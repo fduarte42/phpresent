@@ -12,7 +12,10 @@ use Phpresent\Identity\Presentation\Http\Handler\GetUserHandler;
 use Phpresent\Identity\Presentation\Http\Handler\ListRolesHandler;
 use Phpresent\Identity\Presentation\Http\Handler\ListUsersHandler;
 use Phpresent\Identity\Presentation\Http\Handler\LoginHandler;
+use Phpresent\Identity\Presentation\Http\Handler\LoginPageHandler;
 use Phpresent\Identity\Presentation\Http\Handler\LogoutHandler;
+use Phpresent\Identity\Presentation\Http\Handler\UsersIndexPageHandler;
+use Phpresent\Shared\Presentation\Http\Handler\DashboardPageHandler;
 use Phpresent\Media\Presentation\Http\Handler\DeleteMediaAssetHandler;
 use Phpresent\Media\Presentation\Http\Handler\DownloadMediaAssetHandler;
 use Phpresent\Media\Presentation\Http\Handler\GetMediaAssetHandler;
@@ -70,8 +73,13 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
     $app->post('/api/songsets/sync', SyncSongSetsHandler::class, 'api.songsets.sync');
     $app->post('/api/songsets/{id}/reorder', ReorderSongSetItemsHandler::class, 'api.songsets.reorder');
 
+    $app->get('/login', LoginPageHandler::class, 'login.page');
     $app->post('/login', LoginHandler::class, 'login');
     $app->post('/logout', LogoutHandler::class, 'logout');
+
+    $app->get('/users', UsersIndexPageHandler::class, 'users.index');
+
+    $app->get('/', DashboardPageHandler::class, 'dashboard');
 
     $app->get('/api/users', ListUsersHandler::class, 'api.users.list');
     $app->get('/api/users/{id}', GetUserHandler::class, 'api.users.get');

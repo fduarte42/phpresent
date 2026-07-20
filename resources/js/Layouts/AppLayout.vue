@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NConfigProvider, NLayout, NLayoutContent, NLayoutHeader, NSpace, darkTheme } from 'naive-ui';
 import { usePreferredDark } from '@vueuse/core';
-import { Link } from '@inertiajs/vue3';
+import { Link, router } from '@inertiajs/vue3';
 import { computed } from 'vue';
 
 const prefersDark = usePreferredDark();
@@ -15,7 +15,12 @@ const navLinks = [
     { href: '/media', label: 'Media' },
     { href: '/themes', label: 'Themes' },
     { href: '/bible', label: 'Bible' },
+    { href: '/users', label: 'Users' },
 ];
+
+function onLogout(): void {
+    void fetch('/logout', { method: 'POST' }).then(() => router.visit('/login'));
+}
 </script>
 
 <template>
@@ -26,14 +31,21 @@ const navLinks = [
                     padding: 12px 20px;
                     display: flex;
                     align-items: center;
+                    justify-content: space-between;
                     gap: 24px;
                     font-weight: 600;
                     font-size: 1.1rem;
                 "
             >
-                <span>Phpresent</span>
+                <n-space align="center" size="large">
+                    <Link href="/">Phpresent</Link>
+                    <n-space size="large" style="font-size: 0.95rem; font-weight: 500">
+                        <Link v-for="link in navLinks" :key="link.href" :href="link.href">{{ link.label }}</Link>
+                    </n-space>
+                </n-space>
                 <n-space size="large" style="font-size: 0.95rem; font-weight: 500">
-                    <Link v-for="link in navLinks" :key="link.href" :href="link.href">{{ link.label }}</Link>
+                    <Link href="/login">Login</Link>
+                    <a href="#" @click.prevent="onLogout">Logout</a>
                 </n-space>
             </n-layout-header>
             <n-layout-content style="padding: 20px">

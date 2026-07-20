@@ -942,8 +942,26 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   confirmed against server state). ⏳ First-party device plugins (OBS,
   MIDI, StreamDeck, NDI, DMX) remain future capability interfaces with no
   implementation yet.
-- ⏳ Admin UI (dashboard, users, roles, displays, themes, media, logs, jobs,
-  sync, cache)
+- ✅ Admin UI, scoped to what was genuinely missing (see §22): a `/`
+  dashboard (static links grid, no cross-module stats), and Users/Roles
+  management (§18) — the one module whose REST API already existed but had
+  no UI (§18.4 flagged this as deferred). Building it surfaced a real
+  pre-existing gap: `users.manage` could never be granted to anyone from an
+  empty database (creating a user requires being logged in as someone who
+  already has it) — fixed with `identity:create-admin`
+  (`bin/console.php`), a bootstrap command that goes straight to the
+  repositories the same way a framework seeder would, plus the first actual
+  login *page* this app has had (`POST /login` existed as a REST endpoint
+  from the start, but nothing rendered a form). Manually verified end to
+  end in a real browser: bootstrapped an admin via the console, confirmed
+  `/users` shows a clear "forbidden" message when logged out, logged in,
+  created a role and a user, assigned the role, and deactivated the user —
+  each step checked against the resulting UI state. Displays/Themes/Media
+  already had their own pages (§7.5/§11.1/§19/§20); Bible didn't need one
+  in this pass either (§21). ⏳ Logs/jobs/sync/cache panels remain
+  unbuilt — deliberately: `jobs` has no queue to show, and a logs/sync
+  viewer needs real backend work (querying `audit_log`, `sync_state`), not
+  a UI bolted onto data no endpoint exposes yet.
 - ⏳ Import/export (OpenLyrics, PDF, JSON/ZIP backup)
 - ⏳ OpenAPI generation, full REST surface
 
@@ -1914,3 +1932,99 @@ its full chapter, saved it as a labeled bookmark, confirmed the exact verse
 range persisted server-side via the REST API, and removed the bookmark —
 each step checked against actual server state, not just that the UI looked
 right.
+
+## 22. Admin UI (tenth increment)
+
+"Dashboard, users, roles, displays, themes, media, logs, jobs, sync,
+cache" (§15). Displays/Themes/Media/Bible already had their own pages by
+this point; what was actually missing was a home page and Users/Roles
+management (§18's REST API existed from the third increment on, but §18.4
+explicitly deferred its UI). Scoped to exactly those two pieces —
+logs/jobs/sync/cache panels need real backend work first (see §22.3).
+
+### 22.1 The bootstrap gap this increment surfaced
+
+Building a UI that could actually create/manage users meant *using* it,
+which meant logging in, which surfaced a real gap that had been latent
+since the Identity module was built: every mutating Identity command
+requires an authenticated actor who already holds the relevant permission
+(§18.2) — `CreateUserHandler` requires `users.manage`, which only a `User`
+with the right `Role` can have, but from an empty database no `User` or
+`Role` exists yet. There was no way to ever create the first one through
+normal, permission-gated application code. (`LoginHandler` existed as a
+REST endpoint from the third increment, but nothing rendered a page a
+human could fill in and submit — the login *form* was also missing.)
+
+Fixed with `bin/console.php identity:create-admin` — a Symfony Console
+command (`Identity\Presentation\Console\CreateAdminCommand`) that talks to
+`UserRepositoryInterface`/`RoleRepositoryInterface` directly, bypassing
+`PermissionInterface` on purpose. This is the same shape as a framework's
+seeder/fixture command: an install-time operation run with shell access,
+not a web request, so it isn't gated the same way normal application code
+is. It creates (or reuses, if run again) an `admin` `Role` with all four
+permissions that exist anywhere in this codebase today
+(`users.view`/`users.manage`/`roles.view`/`roles.manage`, §18.2) and one
+`User` in it.
+
+```
+php bin/console.php identity:create-admin \
+    --email=admin@example.com --password=... --display-name="Admin"
+```
+
+### 22.2 Frontend
+
+- `Pages/Auth/Login.vue` (`GET /login`, `Identity\Presentation\Http\
+  Handler\LoginPageHandler`) — a plain email/password form posting
+  directly to the existing `POST /login` REST endpoint, then
+  `router.visit('/')`. `AppLayout.vue` gained unconditional Login/Logout
+  links — deliberately *not* conditional on auth state, since that would
+  need a shared-prop mechanism `InertiaResponseFactory` doesn't have yet
+  (§16.3 already flags shared props as a known future extension point, not
+  built speculatively here).
+- `Pages/Identity/Users.vue` (`GET /users`,
+  `Identity\Presentation\Http\Handler\UsersIndexPageHandler`) — a Roles
+  card (create form + table) and a Users card (create form + table with
+  per-row role-assignment and deactivate actions), matching the create-
+  form-above-table shape used by every other management page in this
+  codebase (`Displays/Index.vue`, `Themes/Index.vue`). The one thing that
+  makes this page different from those: its initial data is
+  permission-gated. `UsersIndexPageHandler` catches
+  `PermissionDeniedException` from the underlying `ListUsersHandler`/
+  `ListRolesHandler` calls and renders the page anyway with `forbidden:
+  true` and empty lists rather than fataling — this app has no route-level
+  auth middleware that rejects a request outright (§18.4: `Authentication
+  Middleware` "never rejects a request itself"), so an anonymous or
+  under-privileged visit to `/users` still needs *something* coherent to
+  render. The page shows a plain "you don't have permission" message in
+  that case.
+- `Pages/Dashboard.vue` (`GET /`, `Shared\Presentation\Http\Handler\
+  DashboardPageHandler`) — a static card grid linking to every admin
+  area. Deliberately doesn't fetch cross-module counts/stats (song count,
+  active displays, ...) — that's a real feature with its own design, not
+  something to bolt on as a side effect of finally giving the app a home
+  page.
+
+### 22.3 What's still not built, and why
+
+- **Logs** — `audit_log` (§18.3) is populated by every mutating Identity
+  command already, but nothing reads it back. A viewer needs a new
+  `ListAuditLogEntriesQuery`/endpoint first; this increment didn't add one
+  because "expose an existing table" is a small but real feature, not a
+  UI-only add-on.
+- **Jobs** — there is no job queue in this codebase at all (Symfony
+  Messenger is listed in the tech stack, §3, but nothing has actually been
+  wired to an async transport in any increment so far — every "Command" in
+  this app runs synchronously, in-process). A jobs panel has nothing to
+  show.
+- **Sync** — `sync_state` (§9/§16) holds the last-synced-at cursor per
+  entity type, but nowhere records sync *history* (individual pass
+  results, errors). A "sync" admin panel showing anything useful needs
+  that history captured first.
+- **Cache** — nothing in this codebase currently exposes cache
+  statistics or a manual "clear cache" action; the PSR-16 cache
+  (`config/autoload/dependencies.global.php`) is just consumed, never
+  inspected.
+
+Each of these is "add a small piece of real backend, then a thin page for
+it" — the same pattern this increment followed for Users/Roles — not
+attempted here because none of the underlying data existed yet to show.
