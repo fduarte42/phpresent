@@ -20,6 +20,7 @@ use Phpresent\Presentation\Presentation\Http\Handler\GetPresentationSessionHandl
 use Phpresent\Presentation\Presentation\Http\Handler\ListDisplaysHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\LoadSongIntoPresentationHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\PresentationSseHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\UpdateDisplayHandler;
 use Phpresent\Song\Presentation\Http\Handler\GetSongHandler;
 use Phpresent\Song\Presentation\Http\Handler\ListSongsHandler;
@@ -69,4 +70,6 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
     $app->get('/api/presentation', GetPresentationSessionHandler::class, 'api.presentation.get');
     $app->post('/api/presentation/load', LoadSongIntoPresentationHandler::class, 'api.presentation.load');
     $app->post('/api/presentation/control', PresentationControlHandler::class, 'api.presentation.control');
+
+    $app->get('/sse/{displayId}', PresentationSseHandler::class, 'sse.presentation');
 };

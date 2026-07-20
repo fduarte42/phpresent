@@ -5,6 +5,7 @@
     "license": "MIT",
     "require": {
         "php": "^8.3",
+        "cboden/ratchet": "^0.4.4",
         "doctrine/dbal": "^4.2",
         "doctrine/doctrine-laminas-hydrator": "^3.3",
         "doctrine/migrations": "^3.8",
@@ -59,6 +60,7 @@
         "cs-check": "php-cs-fixer fix --dry-run --diff",
         "cs-fix": "php-cs-fixer fix",
         "serve": "php -S 0.0.0.0:8080 -t public public/index.php",
+        "serve:websocket": "php bin/websocket-server.php",
         "migrate": "doctrine-migrations migrate --no-interaction",
         "sync:songs": "php bin/console.php songbookpro:sync-songs"
     },

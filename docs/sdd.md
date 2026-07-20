@@ -424,16 +424,15 @@ re-derive it:
   connection query and will fail against the real endpoint exactly as
   before.
 
-## 7. Presentation Engine (fourth increment — Domain/Application/REST only)
+## 7. Presentation Engine (fourth and fifth increments)
 
-This increment implements the Display registry, `SlideComposer` pipeline,
-and `PresentationSession` live-control commands described below, all the way
-through Doctrine persistence and a REST API — but **not** the WebSocket
-server, SSE fallback, or any Vue/Inertia UI. Those need a running process
-and a browser to verify (§16.7's lesson: infra wired but never exercised is
-exactly how latent bugs got in), so they're deliberately deferred to a
-follow-up increment rather than built and merely unit-tested. `GET
-/api/presentation` (§7.4) is the interim way to observe session state.
+The fourth increment implemented the Display registry, `SlideComposer`
+pipeline, and `PresentationSession` live-control commands below, through
+Doctrine persistence and a REST API. The fifth increment added the realtime
+transport (§7.5/§13): the WebSocket server and SSE fallback that actually
+push `PresentationSession` state to displays, rather than requiring `GET
+/api/presentation` polling. Only the Vue/Inertia operator UI remains
+undone — see §7.5.
 
 ### 7.1 Domain Model
 
@@ -600,16 +599,17 @@ since CQRS doesn't require a 1:1 route-to-command mapping and eight
 three-line HTTP handler classes would add files without adding behavior.
 Same JSON/RFC 7807 conventions as §10.
 
-### 7.5 Deferred to a follow-up increment
+### 7.5 Realtime Transport (fifth increment)
 
-- WebSocket server (`bin/websocket-server.php`, Ratchet) and the SSE
-  fallback endpoint (`/presentation/{displayId}/events`) — displays
-  currently have no way to receive push updates; polling `GET
-  /api/presentation` is the only option until that increment.
-- Vue/Inertia UI (display management, live-control operator screen) — no
-  admin UI exists yet for the same reason Identity's doesn't (§15): there's
-  more to build (WebSocket push, in particular) before an operator screen is
-  worth building.
+Implemented: `bin/websocket-server.php` (Ratchet) and `GET
+/sse/{displayId}` (§13 gives the full design and the two real bugs this
+increment's manual verification caught — read that section before touching
+either transport).
+
+**Still not built**: Vue/Inertia UI (display management, live-control
+operator screen) — no admin UI exists yet for the same reason Identity's
+doesn't (§15): there's more value in confirming the transport actually
+pushes state correctly (done, §13) before building a screen on top of it.
 
 ## 8. Cross-Cutting Concerns
 
@@ -707,13 +707,100 @@ same interfaces, not special-cased core code.
 
 ## 13. Realtime Transport
 
-WebSocket server runs as its own process
-(`bin/websocket-server.php`, Ratchet), sharing the Doctrine
-EntityManager config but not the Mezzio HTTP pipeline. It subscribes to
-Presentation-module domain events (via a Messenger transport dedicated to
-realtime fan-out) and pushes frames to connected displays. `/sse/{displayId}`
-on the main HTTP app offers the same event stream over Server-Sent Events for
-environments where WebSocket is blocked.
+Implemented in the fifth increment, and — per this project's convention
+(§16.7) of actually booting things rather than trusting that correct-looking
+code works — verified by running both transports against a real HTTP
+process and a real WebSocket server, issuing REST mutations, and confirming
+the push arrived. That verification caught two real bugs, described below,
+that no amount of reading the code would have surfaced.
+
+### 13.1 Why polling, not a Messenger transport
+
+§7/§7.1's original sketch described the WebSocket server subscribing to
+Presentation-module domain events "via a Messenger transport dedicated to
+realtime fan-out." No Messenger transport has ever actually been wired in
+this codebase (every increment to date dispatches Commands/Queries via
+direct DI-resolved `__invoke`, not a bus — see §16.4/§16.8a) — and the
+WebSocket server is a separate OS process from the Mezzio HTTP app that
+handles `/api/presentation/*` commands, so there is no in-process event to
+subscribe to even if there were a bus.
+
+Standing up a real message broker (Redis pub/sub, AMQP) for a single global
+`presentation_sessions` row would be a lot of new infrastructure for what
+this needs. Instead, both `PresentationChannel` (WebSocket,
+`Phpresent\Presentation\Infrastructure\Realtime\PresentationChannel`) and
+`PresentationSseHandler` (SSE) **poll** `presentation_sessions` on a timer,
+using the same Doctrine EntityManager config the HTTP app uses, and only
+send a frame when the serialized state actually changed since the last
+poll. `EntityManager::clear()` before every poll is required — without it,
+Doctrine's identity map keeps returning the first-loaded (by then stale)
+entity instead of reading the row the HTTP process just committed. Default
+poll interval is 250ms (`websocket.poll_interval_seconds`,
+`config/autoload/websocket.global.php`) — imperceptible latency for a live
+worship-service display, and zero new external dependencies. Redis pub/sub
+remains a reasonable future optimization if poll latency or DB load ever
+becomes a real constraint; nothing here forecloses it, since both consumers
+already isolate "how do I learn about a change" behind one method.
+
+### 13.2 WebSocket server
+
+`bin/websocket-server.php` runs as its own process, sharing the Doctrine
+EntityManager config (via `config/container.php`, same container the HTTP
+app and `cli-config.php` build) but not the Mezzio HTTP pipeline. It hosts
+`PresentationChannel` (a Ratchet `MessageComponentInterface`): `onOpen`
+sends the connecting client the current session state immediately; a
+ReactPHP periodic timer calls `poll()`, which broadcasts to every
+connected client only when the state changed. Run with `composer
+serve:websocket`.
+
+**Bug this increment's manual verification caught**: `Ratchet\Server\
+IoServer::factory($component, $port, $address)` takes no `$loop` parameter
+— passing one positionally after `$address` is silently ignored, because
+`factory()` always creates its own internal loop via `LoopFactory::create()`.
+The periodic poll timer was registered on a *different* loop instance
+(`React\EventLoop\Loop::get()`) than the one `IoServer` actually ran,
+so the server accepted connections and answered the initial `onOpen` state
+correctly, but never once broadcast a change — a bug invisible from reading
+the code, only caught by actually connecting a client and triggering a
+mutation. Fixed by constructing `React\Socket\SocketServer` and `IoServer`
+directly with one explicit shared loop instead of using the factory.
+
+### 13.3 SSE fallback
+
+`GET /sse/{displayId}` on the main HTTP app offers the same session state
+over Server-Sent Events, for environments where WebSocket is blocked.
+`{displayId}` is accepted but unused — the broadcast state doesn't vary per
+display yet. Implemented as a `Laminas\Diactoros\CallbackStream` whose
+callback loops internally (poll, diff, `echo`, `flush()`), matching the
+well-established idiom for this PSR-15 emitter (`SapiStreamEmitter`
+`echo`s a non-readable stream's `getContents()` once, so the callback must
+do its own incremental output rather than returning chunks from `read()`).
+Bounded to `websocket.sse_max_duration_seconds` (default 55s) so a client
+reconnects periodically (standard `EventSource` behavior) rather than the
+connection running forever.
+
+**Bug this increment's manual verification caught**: `connection_aborted()`
+only becomes accurate immediately after PHP attempts to write output — it
+does not update passively when a client disconnects. An earlier version
+checked it at the top of each loop iteration, before a tick that might not
+write anything (state only sent on change, with a 15s heartbeat). Under
+`composer serve` — PHP's built-in dev server, which handles one request at
+a time — a client that vanished during a quiet period went undetected for
+up to 15 seconds, during which *every other request to the app* (including
+unrelated ones) queued behind it. Confirmed with `curl --max-time 2` against
+the SSE endpoint followed immediately by a normal request: the second
+request took 28s. Fixed by writing a minimal `: ping` on every tick (not
+just on real changes or a periodic heartbeat) and checking
+`connection_aborted()` right after — disconnect-detection latency is now one
+`poll_interval_seconds`, confirmed by the same test dropping to ~0.4s.
+
+This is also the confirmation that PHP's built-in dev server cannot usefully
+host more than one long-lived SSE connection at a time (it has no
+concurrency at all) — true concurrent WebSocket + SSE + REST traffic needs
+to be re-verified behind whatever production runtime (php-fpm, RoadRunner,
+...) is eventually chosen; the WebSocket server doesn't share this
+limitation, since Ratchet/ReactPHP is its own always-running event loop,
+independent of the PHP SAPI serving HTTP requests.
 
 ## 14. Directory Layout
 
@@ -757,15 +844,20 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   promoted to `Shared\Domain` for cross-module reuse, REST endpoints incl.
   login/logout, migration, unit + integration tests. No admin UI yet
   (tracked separately below).
-- ✅ Presentation module (Domain/Application/REST only — see §7): `Display`
-  registry, `SlideComposer` (Song → `SlideDeck`, chord-stripping +
-  word-wrap + section-boundary-first pagination), `PresentationSession`
-  live-control commands (Load/Next/Previous/JumpToSlide/Blank/Freeze/
-  HideLyrics/FontSizeAdjust/EmergencyMessage), REST endpoints, migration,
-  unit + integration tests. Also added `Song\Domain\Service\SectionRenderer`
-  (chord-free content extraction) to the Song module as a prerequisite.
-  ⏳ WebSocket server, SSE fallback, and the Vue/Inertia UI are deferred to
-  a follow-up increment — see §7.5.
+- ✅ Presentation module (see §7): `Display` registry, `SlideComposer`
+  (Song → `SlideDeck`, chord-stripping + word-wrap + section-boundary-first
+  pagination), `PresentationSession` live-control commands (Load/Next/
+  Previous/JumpToSlide/Blank/Freeze/HideLyrics/FontSizeAdjust/
+  EmergencyMessage), REST endpoints, migration, unit + integration tests.
+  Also added `Song\Domain\Service\SectionRenderer` (chord-free content
+  extraction) to the Song module as a prerequisite. Realtime transport
+  (§7.5/§13) added in a follow-up increment: WebSocket server
+  (`bin/websocket-server.php`, Ratchet, `cboden/ratchet` added to
+  composer.json) and SSE fallback (`GET /sse/{displayId}`), both DB-poll
+  based (§13.1) rather than the originally-sketched Messenger transport,
+  manually verified end-to-end (two real bugs found and fixed in the
+  process — §13.2/§13.3). ⏳ Only the Vue/Inertia operator UI remains
+  undone — see §7.5.
 - ⏳ Media module (Flysystem-backed assets, video/image/PDF slides)
 - ⏳ Theme engine
 - ⏳ Bible module + provider plugin(s)

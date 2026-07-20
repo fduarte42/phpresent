@@ -26,10 +26,12 @@ use Phpresent\Presentation\Infrastructure\Persistence\DoctrinePresentationSessio
 use Phpresent\Presentation\Presentation\Http\Handler\CreateDisplayHandler as CreateDisplayHttpHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\DeleteDisplayHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\GetDisplayHandler as GetDisplayHttpHandler;
+use Phpresent\Presentation\Application\Query\GetPresentationSessionHandler as GetPresentationSessionQueryHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\GetPresentationSessionHandler as GetPresentationSessionHttpHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\ListDisplaysHandler as ListDisplaysHttpHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\LoadSongIntoPresentationHandler as LoadSongIntoPresentationHttpHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\PresentationSseHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\UpdateDisplayHandler as UpdateDisplayHttpHandler;
 use Phpresent\Shared\Domain\Audit\AuditLoggerInterface;
 use Phpresent\Shared\Domain\Repository\SyncStateRepositoryInterface;
@@ -206,6 +208,18 @@ return [
             GetPresentationSessionHttpHandler::class => ReflectionBasedAbstractFactory::class,
             LoadSongIntoPresentationHttpHandler::class => ReflectionBasedAbstractFactory::class,
             PresentationControlHandler::class => ReflectionBasedAbstractFactory::class,
+
+            PresentationSseHandler::class => static function (ContainerInterface $container): PresentationSseHandler {
+                $config = $container->get('config');
+                $wsConfig = $config['websocket'] ?? [];
+
+                return new PresentationSseHandler(
+                    getPresentationSessionHandler: $container->get(GetPresentationSessionQueryHandler::class),
+                    entityManager: $container->get(EntityManagerInterface::class),
+                    pollIntervalSeconds: (float) ($wsConfig['poll_interval_seconds'] ?? 0.25),
+                    maxDurationSeconds: (int) ($wsConfig['sse_max_duration_seconds'] ?? 55),
+                );
+            },
         ],
         'abstract_factories' => [
             ReflectionBasedAbstractFactory::class,
