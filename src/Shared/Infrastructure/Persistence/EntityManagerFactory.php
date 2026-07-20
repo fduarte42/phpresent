@@ -46,6 +46,7 @@ final class EntityManagerFactory
                 dirname(__DIR__, 2) . '/SongSet/Domain/Entity',
                 dirname(__DIR__, 2) . '/Identity/Domain/Entity',
                 dirname(__DIR__, 2) . '/Presentation/Domain/Entity',
+                dirname(__DIR__, 2) . '/Media/Domain/Entity',
             ],
             isDevMode: (bool) ($config['debug'] ?? false),
         );

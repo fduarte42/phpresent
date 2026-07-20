@@ -7,6 +7,9 @@ use Doctrine\ORM\EntityManagerInterface;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\ClientInterface as GuzzleClientInterface;
 use Laminas\ServiceManager\AbstractFactory\ReflectionBasedAbstractFactory;
+use League\Flysystem\Filesystem;
+use League\Flysystem\FilesystemOperator;
+use League\Flysystem\Local\LocalFilesystemAdapter;
 use Monolog\Handler\StreamHandler;
 use Monolog\Logger;
 use Phpresent\Identity\Application\Service\AuthenticatorInterface;
@@ -19,6 +22,16 @@ use Phpresent\Identity\Infrastructure\Security\CompositeAuthenticator;
 use Phpresent\Identity\Infrastructure\Security\JwtAuthenticator;
 use Phpresent\Identity\Infrastructure\Security\PhpPasswordHasher;
 use Phpresent\Identity\Infrastructure\Security\RolePermissionChecker;
+use Phpresent\Media\Application\Service\MediaStorageInterface;
+use Phpresent\Media\Domain\Repository\MediaAssetRepositoryInterface;
+use Phpresent\Media\Infrastructure\Flysystem\FlysystemMediaStorage;
+use Phpresent\Media\Infrastructure\Persistence\DoctrineMediaAssetRepository;
+use Phpresent\Media\Presentation\Http\Handler\DeleteMediaAssetHandler;
+use Phpresent\Media\Presentation\Http\Handler\DownloadMediaAssetHandler;
+use Phpresent\Media\Presentation\Http\Handler\GetMediaAssetHandler as GetMediaAssetHttpHandler;
+use Phpresent\Media\Presentation\Http\Handler\ListMediaAssetsHandler;
+use Phpresent\Media\Presentation\Http\Handler\MediaIndexPageHandler;
+use Phpresent\Media\Presentation\Http\Handler\UploadMediaAssetHandler as UploadMediaAssetHttpHandler;
 use Phpresent\Presentation\Domain\Repository\DisplayRepositoryInterface;
 use Phpresent\Presentation\Domain\Repository\PresentationSessionRepositoryInterface;
 use Phpresent\Presentation\Infrastructure\Persistence\DoctrineDisplayRepository;
@@ -85,11 +98,25 @@ return [
             AuthenticatorInterface::class => CompositeAuthenticator::class,
             DisplayRepositoryInterface::class => DoctrineDisplayRepository::class,
             PresentationSessionRepositoryInterface::class => DoctrinePresentationSessionRepository::class,
+            MediaAssetRepositoryInterface::class => DoctrineMediaAssetRepository::class,
+            MediaStorageInterface::class => FlysystemMediaStorage::class,
+            FilesystemOperator::class => Filesystem::class,
         ],
         'factories' => [
             EntityManager::class => EntityManagerFactory::class,
 
             GuzzleClient::class => static fn (): GuzzleClient => new GuzzleClient(),
+
+            Filesystem::class => static function (ContainerInterface $container): Filesystem {
+                $config = $container->get('config');
+                $storagePath = (string) $config['media']['storage_path'];
+
+                if (!is_dir($storagePath)) {
+                    mkdir($storagePath, 0775, true);
+                }
+
+                return new Filesystem(new LocalFilesystemAdapter($storagePath));
+            },
 
             SimpleCacheInterface::class => static function (ContainerInterface $container): SimpleCacheInterface {
                 $config = $container->get('config');
@@ -236,6 +263,23 @@ return [
                     searchSongsHandler: $container->get(SearchSongsHandler::class),
                     inertia: $container->get(InertiaResponseFactory::class),
                     websocketPort: (int) ($config['websocket']['port'] ?? 8090),
+                );
+            },
+
+            ListMediaAssetsHandler::class => ReflectionBasedAbstractFactory::class,
+            GetMediaAssetHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            DownloadMediaAssetHandler::class => ReflectionBasedAbstractFactory::class,
+            DeleteMediaAssetHandler::class => ReflectionBasedAbstractFactory::class,
+            MediaIndexPageHandler::class => ReflectionBasedAbstractFactory::class,
+
+            UploadMediaAssetHttpHandler::class => static function (
+                ContainerInterface $container,
+            ): UploadMediaAssetHttpHandler {
+                $config = $container->get('config');
+
+                return new UploadMediaAssetHttpHandler(
+                    uploadMediaAssetHandler: $container->get(\Phpresent\Media\Application\Command\UploadMediaAssetHandler::class),
+                    maxUploadBytes: (int) ($config['media']['max_upload_bytes'] ?? 200 * 1024 * 1024),
                 );
             },
         ],

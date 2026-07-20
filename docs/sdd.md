@@ -905,7 +905,13 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   browser — caught and fixed one real gap (emergency message set state
   correctly but was never rendered anywhere on screen). The Presentation
   module is now feature-complete against §7's original design.
-- ⏳ Media module (Flysystem-backed assets, video/image/PDF slides)
+- ✅ Media module (see §19): `MediaAsset` (Flysystem-backed, local adapter),
+  upload/list/get/download/remove REST endpoints, `Media/Index.vue` browse+
+  upload UI, migration, unit + integration tests, manually verified in a
+  real browser (upload, dimension extraction, thumbnail, search, remove —
+  confirmed both DB row and on-disk file are cleaned up together). ⏳ Not
+  wired into `SlideComposer`/live presentation yet — a deliberate scope cut
+  (§19), not an oversight.
 - ⏳ Theme engine
 - ⏳ Bible module + provider plugin(s)
 - ⏳ Plugin registry + first-party plugins (OBS, MIDI, StreamDeck, NDI, DMX)
@@ -1532,3 +1538,135 @@ trust level as the rest of this codebase's other invariants (e.g.
 No Vue/Inertia pages in this increment — a dedicated Users/Roles admin UI
 is its own later roadmap line ("Admin UI", §15), built once more modules
 have permissions worth managing through a UI rather than direct API calls.
+
+## 19. Media Module (seventh increment)
+
+Images/video/audio/document assets, Flysystem-backed (§2/§3). Scoped to
+storage + REST + a browse/upload UI only (per this increment's own scope
+decision) — wiring media into `SlideComposer`/`PresentationSession` so an
+image or video can actually be shown live is deliberately left for a
+follow-up increment, once there's a concrete reason (an operator wanting to
+show a photo) to extend `SlideSourceType` (§7.1) beyond `Song`/`Blank`.
+
+### 19.1 Domain Model
+
+```
+MediaAsset (aggregate root)
+ ├─ id: MediaAssetId (UUIDv4)
+ ├─ filename: string          // original uploaded filename, shown to users
+ ├─ storageKey: string        // Flysystem path — never exposed to clients directly
+ ├─ mimeType: string
+ ├─ sizeBytes: int
+ ├─ kind: MediaKind (Image|Video|Audio|Document)  // derived from mimeType
+ ├─ width: ?int                // images only
+ ├─ height: ?int                // images only
+ └─ uploadedAt: DateTimeImmutable
+```
+
+Design decisions:
+
+- **Assets are immutable once uploaded.** No `update()` — replacing content
+  means uploading a new asset and removing the old one. This sidesteps any
+  "what happens to a `storageKey` something else already references" question
+  entirely, and matches how every other synced/uploaded entity in this
+  codebase treats its identity as stable once created.
+- **No `durationSeconds` field for video/audio.** Extracting it would need a
+  media-inspection library this project doesn't have (`getimagesize()` only
+  covers raster images). Rather than add a column that's permanently null,
+  the field doesn't exist — same reasoning as `PresentationSession` not
+  having `SongSet`/`Bible` `SlideSourceType` cases yet (§7.1), or Identity's
+  `Role`↔`User` deferring a join table (§18.1). Add it when duration is
+  actually extractable, not before.
+- **`width`/`height` are only ever populated for images**, extracted from
+  the actual uploaded bytes (`FlysystemMediaStorage::write()`), never
+  fabricated or left as a guess for other kinds.
+
+### 19.2 Application Layer
+
+- `MediaStorageInterface` (`Media\Application\Service`) — the Flysystem-
+  facing port, same placement convention as `SongSourceInterface` (§5).
+  `write(storageKey, mimeType, StreamInterface $contents): array{width,
+  height}`, `readStream(storageKey): StreamInterface`, `delete(storageKey)`.
+  Takes a PSR-7 `StreamInterface` for content rather than a raw string so
+  large uploads (video) are never required to be fully buffered in memory —
+  the same "PSR interfaces are a standing exception to the Infrastructure
+  boundary" carve-out already established for `LoggerInterface` (§2).
+  `write()` takes `mimeType` specifically so the implementation can decide,
+  before touching any bytes, whether dimension extraction (which *does*
+  need the full byte string, via `getimagesizefromstring()`) is worth
+  attempting — video/audio/documents stream straight through via
+  `writeStream()` and are never buffered.
+- `UploadMediaAssetCommand(filename, mimeType, sizeBytes, contents)` /
+  `UploadMediaAssetHandler` — generates a collision-proof storage key
+  (`{uuid}-{sanitized filename}`; sanitization strips everything but
+  `A-Za-z0-9._-` and runs the result through `basename()` first, so a
+  crafted `../../etc/passwd`-style filename can't escape the storage root),
+  writes via `MediaStorageInterface`, persists the resulting `MediaAsset`.
+- `RemoveMediaAssetCommand`/`Handler` — deletes from storage *and* the
+  repository; a partial failure (storage succeeds, DB row lingers, or vice
+  versa) isn't specially handled — same level of rigor as the rest of this
+  codebase's non-transactional multi-step operations.
+- `SearchMediaAssetsQuery`/`Handler`, `GetMediaAssetQuery`/`Handler` — same
+  shape as every other module's search/get split (§5).
+- `GetMediaAssetContentQuery`/`Handler` → `MediaAssetContent` (filename +
+  mimeType + `StreamInterface`) — the one query in this codebase that
+  returns bytes rather than a DTO of scalars, for
+  `DownloadMediaAssetHandler` for stream a binary HTTP response.
+
+### 19.3 Infrastructure
+
+`FlysystemMediaStorage` implements `MediaStorageInterface` against
+`League\Flysystem\FilesystemOperator` (`league/flysystem-local`'s
+`LocalFilesystemAdapter`, rooted at `media.storage_path`
+— S3-compatible adapters are listed in §3 as a future option but not
+wired). Flysystem's own API is resource-based, not PSR-7, so this class is
+also where that translation happens: `StreamInterface::detach()` for
+outgoing writes (falling back to a manual `php://temp` copy if the stream
+isn't resource-backed), and `Laminas\Diactoros\Stream` wrapping Flysystem's
+returned resource for reads.
+
+### 19.4 Database Schema
+
+```sql
+CREATE TABLE media_assets (
+    id                CHAR(36) PRIMARY KEY,
+    filename          VARCHAR(255) NOT NULL,
+    storage_key       VARCHAR(512) NOT NULL,
+    mime_type         VARCHAR(191) NOT NULL,
+    size_bytes        INTEGER NOT NULL,
+    kind              VARCHAR(16) NOT NULL,
+    width             INTEGER,
+    height            INTEGER,
+    uploaded_at       DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX uniq_media_assets_storage_key ON media_assets(storage_key);
+CREATE INDEX idx_media_assets_filename ON media_assets(filename);
+```
+
+### 19.5 REST API
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/media` | paginated list + filename search (`?q=`) |
+| GET | `/api/media/{id}` | single asset metadata |
+| GET | `/api/media/{id}/file` | streamed asset bytes, correct `Content-Type` |
+| POST | `/api/media` | multipart upload (field `file`), rejects over `media.max_upload_bytes` with `413` |
+| DELETE | `/api/media/{id}` | remove (storage + database) |
+
+### 19.6 Frontend
+
+`Pages/Media/Index.vue` — a card grid (not `n-data-table`, unlike every
+other list page in this codebase — a media library reads naturally as
+thumbnails, not table rows). Images render via `<img :src="/api/media/
+{id}/file">` directly; video/audio/documents show an icon instead of
+attempting a thumbnail. `useMediaStore` wraps list/search/upload (via
+`FormData`, not JSON — the one store in this codebase that isn't a plain
+JSON `fetch()` wrapper, §11.1's `usePresentationStore` being the other
+exception)/remove.
+
+Manually verified end-to-end (Chrome, computer-use browser automation):
+uploaded a real PNG, confirmed the server-extracted dimensions (400×300)
+matched the source file exactly, confirmed the thumbnail rendered from the
+streamed `/file` endpoint, searched, and removed — then confirmed via the
+REST API and the filesystem directly that removal deleted *both* the
+database row and the on-disk file, not just one or the other.

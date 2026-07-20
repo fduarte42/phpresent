@@ -13,6 +13,12 @@ use Phpresent\Identity\Presentation\Http\Handler\ListRolesHandler;
 use Phpresent\Identity\Presentation\Http\Handler\ListUsersHandler;
 use Phpresent\Identity\Presentation\Http\Handler\LoginHandler;
 use Phpresent\Identity\Presentation\Http\Handler\LogoutHandler;
+use Phpresent\Media\Presentation\Http\Handler\DeleteMediaAssetHandler;
+use Phpresent\Media\Presentation\Http\Handler\DownloadMediaAssetHandler;
+use Phpresent\Media\Presentation\Http\Handler\GetMediaAssetHandler;
+use Phpresent\Media\Presentation\Http\Handler\ListMediaAssetsHandler;
+use Phpresent\Media\Presentation\Http\Handler\MediaIndexPageHandler;
+use Phpresent\Media\Presentation\Http\Handler\UploadMediaAssetHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\CreateDisplayHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\DeleteDisplayHandler;
 use Phpresent\Presentation\Presentation\Http\Handler\DisplaysIndexPageHandler;
@@ -77,4 +83,12 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
     $app->post('/api/presentation/control', PresentationControlHandler::class, 'api.presentation.control');
 
     $app->get('/sse/{displayId}', PresentationSseHandler::class, 'sse.presentation');
+
+    $app->get('/media', MediaIndexPageHandler::class, 'media.index');
+
+    $app->get('/api/media', ListMediaAssetsHandler::class, 'api.media.list');
+    $app->get('/api/media/{id}', GetMediaAssetHandler::class, 'api.media.get');
+    $app->get('/api/media/{id}/file', DownloadMediaAssetHandler::class, 'api.media.download');
+    $app->post('/api/media', UploadMediaAssetHandler::class, 'api.media.upload');
+    $app->delete('/api/media/{id}', DeleteMediaAssetHandler::class, 'api.media.delete');
 };
