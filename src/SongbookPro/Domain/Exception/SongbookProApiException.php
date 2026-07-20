@@ -26,4 +26,12 @@ final class SongbookProApiException extends RuntimeException
     {
         return new self('SongbookPro GraphQL API rate limit exceeded.');
     }
+
+    public static function unauthenticated(): self
+    {
+        return new self(
+            'SongbookPro GraphQL API rejected the request as unauthenticated — the access '
+            . 'token is missing, invalid, or expired.',
+        );
+    }
 }

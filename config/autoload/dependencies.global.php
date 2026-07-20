@@ -26,6 +26,8 @@ use Phpresent\Shared\Infrastructure\Http\InertiaResponseFactory;
 use Phpresent\Shared\Infrastructure\Persistence\DoctrineAuditLogger;
 use Phpresent\Shared\Infrastructure\Persistence\DoctrineSyncStateRepository;
 use Phpresent\Shared\Infrastructure\Persistence\EntityManagerFactory;
+use Phpresent\SongbookPro\Domain\Service\AccessTokenProviderInterface;
+use Phpresent\SongbookPro\Infrastructure\Security\StaticAccessTokenProvider;
 use Phpresent\Song\Application\Service\SongSourceInterface;
 use Phpresent\Song\Domain\Repository\SongRepositoryInterface;
 use Phpresent\Song\Infrastructure\Persistence\DoctrineSongRepository;
@@ -37,8 +39,6 @@ use Phpresent\SongSet\Infrastructure\SongbookPro\SongSetSource;
 use Phpresent\Song\Presentation\Http\Handler\GetSongHandler as GetSongHttpHandler;
 use Phpresent\Song\Presentation\Http\Handler\ListSongsHandler;
 use Phpresent\Song\Presentation\Http\Handler\SyncSongsHandler as SyncSongsHttpHandler;
-use Phpresent\SongbookPro\Infrastructure\Cache\ETagCacheInterface;
-use Phpresent\SongbookPro\Infrastructure\Cache\PsrETagCache;
 use Phpresent\SongbookPro\Infrastructure\GraphQL\GraphQLClientInterface;
 use Phpresent\SongbookPro\Infrastructure\GraphQL\RateLimiter;
 use Phpresent\SongbookPro\Infrastructure\GraphQL\SongbookProGraphQLClient;
@@ -59,7 +59,7 @@ return [
             SongSourceInterface::class => SongSource::class,
             SongSetRepositoryInterface::class => DoctrineSongSetRepository::class,
             SongSetSourceInterface::class => SongSetSource::class,
-            ETagCacheInterface::class => PsrETagCache::class,
+            AccessTokenProviderInterface::class => StaticAccessTokenProvider::class,
             UserRepositoryInterface::class => DoctrineUserRepository::class,
             RoleRepositoryInterface::class => DoctrineRoleRepository::class,
             PasswordHasherInterface::class => PhpPasswordHasher::class,
@@ -101,6 +101,12 @@ return [
                 return new RateLimiter($rate);
             },
 
+            StaticAccessTokenProvider::class => static function (ContainerInterface $container): StaticAccessTokenProvider {
+                $config = $container->get('config');
+
+                return new StaticAccessTokenProvider((string) $config['songbookpro']['api_token']);
+            },
+
             GraphQLClientInterface::class => static function (ContainerInterface $container): GraphQLClientInterface {
                 $config = $container->get('config');
                 $sbpConfig = $config['songbookpro'];
@@ -108,10 +114,9 @@ return [
                 return new SongbookProGraphQLClient(
                     httpClient: $container->get(GuzzleClientInterface::class),
                     rateLimiter: $container->get(RateLimiter::class),
-                    etagCache: $container->get(ETagCacheInterface::class),
+                    tokenProvider: $container->get(AccessTokenProviderInterface::class),
                     logger: $container->get(LoggerInterface::class),
                     apiUrl: (string) $sbpConfig['api_url'],
-                    apiToken: (string) $sbpConfig['api_token'],
                     maxRetries: (int) $sbpConfig['graphql']['max_retries'],
                     retryBaseDelayMs: (int) $sbpConfig['graphql']['retry_base_delay_ms'],
                 );
@@ -123,7 +128,8 @@ return [
                 return new SongSource(
                     client: $container->get(GraphQLClientInterface::class),
                     mapper: $container->get(\Phpresent\Song\Infrastructure\Mapper\SongGraphQLMapper::class),
-                    pageSize: (int) $config['songbookpro']['graphql']['page_size'],
+                    logger: $container->get(LoggerInterface::class),
+                    library: (string) $config['songbookpro']['group_id'],
                 );
             },
 

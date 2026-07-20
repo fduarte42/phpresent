@@ -8,57 +8,45 @@ use Generator;
 use Phpresent\Song\Application\DTO\RemoteSongRecord;
 use Phpresent\Song\Application\Service\SongSourceInterface;
 use Phpresent\Song\Infrastructure\Mapper\SongGraphQLMapper;
+use Phpresent\SongbookPro\Infrastructure\GraphQL\DeltaFetcher;
+use Phpresent\SongbookPro\Infrastructure\GraphQL\EpochMillis;
 use Phpresent\SongbookPro\Infrastructure\GraphQL\GraphQLClientInterface;
+use Psr\Log\LoggerInterface;
 
 /**
- * Walks SongbookPro's `songs` GraphQL connection page by page, yielding one
- * `RemoteSongRecord` at a time so callers never need to hold the full
- * catalogue in memory.
+ * Walks SongbookPro's generic `dataItems` delta query (§6.2) via
+ * `DeltaFetcher`, yielding one `RemoteSongRecord` per `SONG`-type item.
+ *
+ * Deletions (`deleted: true` tombstones) and `SONG_VARIANT` items are
+ * observed but not yet acted on — `Song` has no "retired" state to sync a
+ * tombstone into yet, and `SongGraphQLMapper` cannot safely join a variant
+ * to its song (see its docblock). Both are logged so the gap stays visible
+ * rather than silently dropped.
  */
-final readonly class SongSource implements SongSourceInterface
+final class SongSource implements SongSourceInterface
 {
-    private const string QUERY = <<<'GRAPHQL'
-        query Songs($after: String, $updatedSince: String, $first: Int!) {
-          songs(after: $after, updatedSince: $updatedSince, first: $first) {
-            pageInfo { hasNextPage endCursor }
-            edges {
-              node {
-                id
-                title
-                authors
-                copyright
-                ccli
-                key
-                tempo
-                capo
-                tags
-                format
-                revision
-                checksum
-                metadata
-                sections {
-                  position
-                  type
-                  label
-                  content
-                  chordProSource
-                }
-              }
-            }
-          }
-        }
-        GRAPHQL;
+    private const string TYPE_SONG = 'SONG';
+
+    private ?string $lastTimestamp = null;
 
     public function __construct(
-        private GraphQLClientInterface $client,
-        private SongGraphQLMapper $mapper,
-        private int $pageSize = 50,
+        private readonly GraphQLClientInterface $client,
+        private readonly SongGraphQLMapper $mapper,
+        private readonly LoggerInterface $logger,
+        private readonly string $library,
     ) {
     }
 
     public function fetchAll(?string $updatedSince = null): iterable
     {
+        $this->lastTimestamp = null;
+
         return $this->walk($updatedSince);
+    }
+
+    public function lastSyncedAt(): ?string
+    {
+        return $this->lastTimestamp;
     }
 
     /**
@@ -66,24 +54,34 @@ final readonly class SongSource implements SongSourceInterface
      */
     private function walk(?string $updatedSince): Generator
     {
-        $after = null;
+        $fetcher = new DeltaFetcher($this->client, $this->library);
+        $since = $updatedSince !== null ? EpochMillis::fromAtom($updatedSince) : null;
 
-        do {
-            $response = $this->client->query(self::QUERY, [
-                'after' => $after,
-                'updatedSince' => $updatedSince,
-                'first' => $this->pageSize,
-            ]);
-
-            /** @var array{pageInfo: array{hasNextPage: bool, endCursor: ?string}, edges: array<int, array{node: array<string, mixed>}>} $songs */
-            $songs = $response->data['songs'];
-
-            foreach ($songs['edges'] as $edge) {
-                yield $this->mapper->mapSong($edge['node']);
+        foreach ($fetcher->fetch($since) as $item) {
+            if ($item->type !== self::TYPE_SONG) {
+                continue;
             }
 
-            $after = $songs['pageInfo']['endCursor'];
-            $hasNextPage = $songs['pageInfo']['hasNextPage'];
-        } while ($hasNextPage && $after !== null);
+            if ($item->deleted) {
+                $this->logger->warning('Skipping SongbookPro song tombstone — Song has no retired state yet', [
+                    'externalId' => $item->id,
+                ]);
+
+                continue;
+            }
+
+            $record = $this->mapper->mapSong($item);
+
+            if ($record === null) {
+                $this->logger->warning('Skipping SONG item with no decodable data', ['externalId' => $item->id]);
+
+                continue;
+            }
+
+            yield $record;
+        }
+
+        $lastTimestamp = $fetcher->lastTimestamp();
+        $this->lastTimestamp = $lastTimestamp !== null ? EpochMillis::toAtom($lastTimestamp) : null;
     }
 }

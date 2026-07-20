@@ -19,4 +19,14 @@ interface SongSourceInterface
      * @return iterable<RemoteSongRecord>
      */
     public function fetchAll(?string $updatedSince = null): iterable;
+
+    /**
+     * ATOM-format timestamp reflecting the newest data SongbookPro reported
+     * during the most recent `fetchAll()` call — including the case where
+     * nothing changed, since the delta cursor still needs to advance to
+     * "now" so the next sync doesn't re-scan the same window. For
+     * persisting as the next call's `$updatedSince`. Null if `fetchAll()`
+     * has not been called yet.
+     */
+    public function lastSyncedAt(): ?string;
 }

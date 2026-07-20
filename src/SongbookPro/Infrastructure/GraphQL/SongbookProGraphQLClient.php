@@ -7,18 +7,24 @@ namespace Phpresent\SongbookPro\Infrastructure\GraphQL;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\GuzzleException;
 use Phpresent\SongbookPro\Domain\Exception\SongbookProApiException;
-use Phpresent\SongbookPro\Infrastructure\Cache\ETagCacheInterface;
+use Phpresent\SongbookPro\Domain\Service\AccessTokenProviderInterface;
 use Psr\Log\LoggerInterface;
 
+/**
+ * Talks to the real, verified SongbookPro Groups endpoint (SDD §6.1):
+ * `POST https://songbookpro-groups-prod.azurewebsites.net/graphql`, a single
+ * Apollo Server instance that always responds with a JSON *array* (the
+ * official web client's request-batching format) even for a single-operation
+ * request, so every response is unwrapped at `[0]` here.
+ */
 final readonly class SongbookProGraphQLClient implements GraphQLClientInterface
 {
     public function __construct(
         private ClientInterface $httpClient,
         private RateLimiter $rateLimiter,
-        private ETagCacheInterface $etagCache,
+        private AccessTokenProviderInterface $tokenProvider,
         private LoggerInterface $logger,
         private string $apiUrl,
-        private string $apiToken,
         private int $maxRetries = 3,
         private int $retryBaseDelayMs = 200,
     ) {
@@ -26,16 +32,13 @@ final readonly class SongbookProGraphQLClient implements GraphQLClientInterface
 
     public function query(string $query, array $variables = []): GraphQLResponse
     {
-        $cacheKey = $query . json_encode($variables, JSON_THROW_ON_ERROR);
-        $cached = $this->etagCache->get($cacheKey);
-
         $attempt = 0;
         while (true) {
             $attempt++;
             $this->rateLimiter->acquire();
 
             try {
-                return $this->attempt($query, $variables, $cacheKey, $cached);
+                return $this->attempt($query, $variables);
             } catch (SongbookProApiException $exception) {
                 if ($attempt > $this->maxRetries) {
                     throw $exception;
@@ -54,21 +57,17 @@ final readonly class SongbookProGraphQLClient implements GraphQLClientInterface
 
     /**
      * @param array<string, mixed> $variables
-     * @param array{etag: string, data: array<string, mixed>}|null $cached
      */
-    private function attempt(string $query, array $variables, string $cacheKey, ?array $cached): GraphQLResponse
+    private function attempt(string $query, array $variables): GraphQLResponse
     {
-        $headers = [
-            'Content-Type' => 'application/json',
-            'Authorization' => 'Bearer ' . $this->apiToken,
-        ];
-        if ($cached !== null) {
-            $headers['If-None-Match'] = $cached['etag'];
-        }
-
         try {
             $response = $this->httpClient->request('POST', $this->apiUrl, [
-                'headers' => $headers,
+                'headers' => [
+                    'Content-Type' => 'application/json',
+                    'Authorization' => 'Bearer ' . $this->tokenProvider->getAccessToken(),
+                ],
+                // A bare single-operation body is accepted the same way as the
+                // official client's batched array (§6.1) — no need to wrap it.
                 'json' => ['query' => $query, 'variables' => $variables],
                 'http_errors' => false,
             ]);
@@ -78,8 +77,8 @@ final readonly class SongbookProGraphQLClient implements GraphQLClientInterface
 
         $statusCode = $response->getStatusCode();
 
-        if ($statusCode === 304 && $cached !== null) {
-            return new GraphQLResponse(data: $cached['data'], etag: $cached['etag'], fromCache: true);
+        if ($statusCode === 401) {
+            throw SongbookProApiException::unauthenticated();
         }
 
         if ($statusCode === 429) {
@@ -90,20 +89,14 @@ final readonly class SongbookProGraphQLClient implements GraphQLClientInterface
             throw new SongbookProApiException("SongbookPro GraphQL API returned HTTP {$statusCode}");
         }
 
-        /** @var array{data?: array<string, mixed>, errors?: array<int, array{message: string}>} $body */
+        /** @var list<array{data?: array<string, mixed>, errors?: array<int, array{message: string}>}> $body */
         $body = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+        $operationResult = $body[0] ?? [];
 
-        if (isset($body['errors']) && $body['errors'] !== []) {
-            throw SongbookProApiException::fromGraphQLErrors($body['errors']);
+        if (isset($operationResult['errors']) && $operationResult['errors'] !== []) {
+            throw SongbookProApiException::fromGraphQLErrors($operationResult['errors']);
         }
 
-        $data = $body['data'] ?? [];
-        $etag = $response->getHeaderLine('ETag');
-
-        if ($etag !== '') {
-            $this->etagCache->put($cacheKey, $etag, $data);
-        }
-
-        return new GraphQLResponse(data: $data, etag: $etag !== '' ? $etag : null, fromCache: false);
+        return new GraphQLResponse(data: $operationResult['data'] ?? []);
     }
 }

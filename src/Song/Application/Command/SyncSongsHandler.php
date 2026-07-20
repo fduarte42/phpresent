@@ -49,7 +49,11 @@ final readonly class SyncSongsHandler
             };
         }
 
-        $this->syncState->setLastSyncedAt(self::ENTITY_TYPE, $syncStartedAt);
+        $lastSyncedAt = $this->songSource->lastSyncedAt();
+        $this->syncState->setLastSyncedAt(
+            self::ENTITY_TYPE,
+            $lastSyncedAt !== null ? new DateTimeImmutable($lastSyncedAt) : $syncStartedAt,
+        );
 
         $this->logger->info('SongbookPro song sync complete', [
             'created' => $created,

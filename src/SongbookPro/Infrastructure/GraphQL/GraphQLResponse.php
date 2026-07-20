@@ -11,8 +11,6 @@ final readonly class GraphQLResponse
      */
     public function __construct(
         public array $data,
-        public ?string $etag = null,
-        public bool $fromCache = false,
     ) {
     }
 }

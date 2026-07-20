@@ -13,6 +13,7 @@
 config/autoload/*.local.php
 .phpunit.result.cache
 .pest.result.cache
+.php-cs-fixer.cache
 /.phpunit.cache/
 /coverage/
 *.log

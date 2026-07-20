@@ -11,8 +11,13 @@ return [
         'dsn' => getenv('CACHE_DSN') ?: 'array://',
     ],
     'songbookpro' => [
-        'api_url' => getenv('SONGBOOKPRO_API_URL') ?: 'https://groups.songbookpro.com/graphql',
+        // Confirmed live endpoint, SDD §6.1 — not a guess.
+        'api_url' => getenv('SONGBOOKPRO_API_URL') ?: 'https://songbookpro-groups-prod.azurewebsites.net/graphql',
+        // A per-install token issued out of band (SDD §6.3 — the real OAuth
+        // grant a server-side client should use is still unresolved).
         'api_token' => getenv('SONGBOOKPRO_API_TOKEN') ?: '',
+        // The `library` GraphQL variable in every `dataItems`/`addDataItems`
+        // call (SDD §6.2) — a SongbookPro Groups library id, not an org id.
         'group_id' => getenv('SONGBOOKPRO_GROUP_ID') ?: '',
         'sync_interval_seconds' => (int) (getenv('SONGBOOKPRO_SYNC_INTERVAL_SECONDS') ?: 300),
         'rate_limit_per_second' => (int) (getenv('SONGBOOKPRO_RATE_LIMIT_PER_SECOND') ?: 5),

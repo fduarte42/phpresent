@@ -17,7 +17,7 @@ final class FakeSongSource implements SongSourceInterface
     /**
      * @param list<RemoteSongRecord> $records
      */
-    public function __construct(array $records = [])
+    public function __construct(array $records = [], private ?string $nextSyncedAt = null)
     {
         $this->records = $records;
     }
@@ -27,5 +27,10 @@ final class FakeSongSource implements SongSourceInterface
         $this->lastRequestedSince = $updatedSince;
 
         return $this->records;
+    }
+
+    public function lastSyncedAt(): ?string
+    {
+        return $this->nextSyncedAt;
     }
 }

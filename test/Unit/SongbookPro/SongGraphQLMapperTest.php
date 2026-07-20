@@ -3,58 +3,82 @@
 declare(strict_types=1);
 
 use Phpresent\Song\Domain\ValueObject\LyricFormat;
-use Phpresent\Song\Domain\ValueObject\SectionType;
 use Phpresent\Song\Infrastructure\Mapper\SongGraphQLMapper;
+use Phpresent\SongbookPro\Infrastructure\GraphQL\LibraryItem;
 
-it('maps a GraphQL song node into a RemoteSongRecord, preserving section order', function (): void {
+it('maps a SONG LibraryItem into a RemoteSongRecord, passing unmodeled fields through as metadata', function (): void {
     $mapper = new SongGraphQLMapper();
 
-    $record = $mapper->mapSong([
+    $item = LibraryItem::fromGraphQL([
         'id' => 'sbp-42',
-        'title' => '10,000 Reasons',
-        'authors' => ['Matt Redman', 'Jonas Myrin'],
-        'copyright' => '2011 Thankyou Music',
-        'ccli' => '6016351',
-        'key' => 'C',
-        'tempo' => 73,
-        'capo' => 0,
-        'tags' => ['worship', 'CCLI Top 100'],
-        'format' => 'chordpro',
-        'revision' => 'rev-7',
-        'checksum' => 'abc123',
-        'sections' => [
-            ['position' => 1, 'type' => 'chorus', 'content' => 'Bless the Lord, O my soul'],
-            ['position' => 0, 'type' => 'verse', 'label' => 'Verse 1', 'content' => 'The sun comes up'],
-        ],
+        'type' => 'SONG',
+        'deleted' => false,
+        'data' => json_encode([
+            'title' => '10,000 Reasons',
+            'artist' => 'Matt Redman, Jonas Myrin',
+            'tempo' => 73,
+            'subtitle' => '',
+        ], JSON_THROW_ON_ERROR),
     ]);
 
+    $record = $mapper->mapSong($item);
+
+    expect($record)->not->toBeNull();
     expect($record->externalId)->toBe('sbp-42');
     expect($record->title)->toBe('10,000 Reasons');
     expect($record->authors)->toBe(['Matt Redman', 'Jonas Myrin']);
-    expect($record->format)->toBe(LyricFormat::ChordPro);
-    expect($record->ccli)->toBe('6016351');
-    expect($record->defaultKey)->toBe('C');
-    expect($record->sections)->toHaveCount(2);
-
-    // Mapper must preserve SongbookPro's given order verbatim, not re-sort it.
-    expect($record->sections[0]->position)->toBe(1);
-    expect($record->sections[0]->type)->toBe(SectionType::Chorus);
-    expect($record->sections[1]->position)->toBe(0);
-    expect($record->sections[1]->type)->toBe(SectionType::Verse);
-    expect($record->sections[1]->label)->toBe('Verse 1');
+    expect($record->tempo)->toBe(73);
+    expect($record->format)->toBe(LyricFormat::PlainText);
+    expect($record->sections)->toBe([]);
+    expect($record->revision)->toBe($record->checksum);
+    expect($record->metadata)->toBe([
+        'title' => '10,000 Reasons',
+        'artist' => 'Matt Redman, Jonas Myrin',
+        'tempo' => 73,
+        'subtitle' => '',
+    ]);
 });
 
-it('defaults unrecognized section types to Custom', function (): void {
+it('produces the same checksum for identical data and a different one when data changes', function (): void {
     $mapper = new SongGraphQLMapper();
 
-    $record = $mapper->mapSong([
+    $a = $mapper->mapSong(LibraryItem::fromGraphQL([
         'id' => 'sbp-1',
-        'title' => 'Test',
-        'format' => 'plain_text',
-        'sections' => [
-            ['position' => 0, 'type' => 'vamp', 'content' => 'x'],
-        ],
+        'type' => 'SONG',
+        'deleted' => false,
+        'data' => json_encode(['title' => 'Test'], JSON_THROW_ON_ERROR),
+    ]));
+    $b = $mapper->mapSong(LibraryItem::fromGraphQL([
+        'id' => 'sbp-1',
+        'type' => 'SONG',
+        'deleted' => false,
+        'data' => json_encode(['title' => 'Test (renamed)'], JSON_THROW_ON_ERROR),
+    ]));
+
+    expect($a->checksum)->not->toBe($b->checksum);
+});
+
+it('returns null for a tombstoned item', function (): void {
+    $mapper = new SongGraphQLMapper();
+
+    $item = LibraryItem::fromGraphQL(['id' => 'sbp-1', 'type' => 'SONG', 'deleted' => true]);
+
+    expect($mapper->mapSong($item))->toBeNull();
+});
+
+it('defaults missing title and artist to empty', function (): void {
+    $mapper = new SongGraphQLMapper();
+
+    $item = LibraryItem::fromGraphQL([
+        'id' => 'sbp-1',
+        'type' => 'SONG',
+        'deleted' => false,
+        'data' => json_encode([], JSON_THROW_ON_ERROR),
     ]);
 
-    expect($record->sections[0]->type)->toBe(SectionType::Custom);
+    $record = $mapper->mapSong($item);
+
+    expect($record->title)->toBe('');
+    expect($record->authors)->toBe([]);
+    expect($record->tempo)->toBeNull();
 });

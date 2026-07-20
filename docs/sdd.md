@@ -207,6 +207,8 @@ There is no `ETagCache`/conditional-request layer — the original design
 included one, but no `ETag`/`If-None-Match` exchange was observed in real
 traffic, and the `since`-based delta query already gives Phpresent the
 "don't re-fetch unchanged data" property that layer was meant to provide.
+(As of the §6.4 rewrite this is no longer just a design note — the classes
+have been deleted; there is nothing left calling them.)
 
 ### 6.1 Verified API Surface (reverse-engineered from live traffic, 2026-07-19)
 
@@ -355,6 +357,69 @@ that rewrite, not assumed:
   session — this determines whether `SongbookProGraphQLClient` needs a
   refresh-token store, a client-credentials grant, or something
   SongbookPro-specific (e.g. a per-install API token issued out of band).
+  **Resolved for now** by picking the one option that needs no further
+  confirmation: `AccessTokenProviderInterface` /
+  `StaticAccessTokenProvider` reads a pre-obtained token straight from
+  config (`songbookpro.api_token`). Swapping in a real client-credentials
+  or refresh-token flow later is a pure Infrastructure change behind that
+  same port — see §6.4.
+
+### 6.4 Transport Rewrite Status (2026-07-20)
+
+The Song-side sync path has been rewritten against §6.1/§6.2 as described
+above; the SongSet side has not (its blocker — the unconfirmed `type` value
+for sets — is unchanged, see below). What changed and what's still assumed
+or missing, so the next increment to touch this code doesn't have to
+re-derive it:
+
+**Rewritten and working (unit + integration tested against fakes):**
+
+- `SongbookProGraphQLClient` — real endpoint, bearer auth via
+  `AccessTokenProviderInterface`, unwraps the `response[0]` array shape,
+  retry/rate-limit kept, `ETagCache` deleted entirely.
+- `DeltaFetcher` — generic `GetDataItemsSince`/`hasMore` pager, yielding
+  `LibraryItem` (`id`/`type`/`deleted`/decoded `data`). Shared by any future
+  module that syncs through `dataItems` — it has no Song-specific
+  knowledge, unlike the old per-entity `songs`/`songSets` queries it
+  replaces.
+- `SongGraphQLMapper`/`SongSource` — filter `LibraryItem`s to `type ===
+  'SONG'`, map to `RemoteSongRecord`.
+
+**Deliberately narrow, and why (don't "fix" these without new evidence):**
+
+- **A synced `Song` currently has no sections.** The only confirmed content
+  payload (`SONG_VARIANT`, §6.2) has a single `content` string field, not a
+  `sections[]` array, and — critically — nothing in the captured traffic
+  shows how a `SONG_VARIANT` item references the `SONG` it belongs to. Both
+  of those need a fresh, targeted traffic capture (open a song with known
+  content in the dashboard, inspect the full uncapped `SONG` and
+  `SONG_VARIANT` `data` payloads) before `SongGraphQLMapper` can be
+  extended to actually populate `sections`. Guessing a verse/chorus split
+  from one opaque content blob was explicitly avoided — it would be
+  fabricating a spec, the exact mistake §6/§16.8a already called out once.
+- **`revision`/`checksum` are computed locally**
+  (`hash('xxh128', json_encode($data))`), not read from the API — the
+  confirmed `dataItems.items` shape (§6.2) has no per-item revision field,
+  only the page-level `timestamp` `DeltaFetcher` uses for paging. This is a
+  legitimate substitute for `Song::hasDiverged()`'s purposes (detecting
+  drift), not a placeholder waiting to be replaced.
+- **`EpochMillis` assumes `since`/`timestamp` are epoch milliseconds.** The
+  reverse-engineering session only ever observed single-page (`hasMore:
+  false`) responses, so no real `since`→`timestamp` round trip was
+  captured to confirm the unit against. Milliseconds is the routine
+  convention for a JS/Apollo `BigInt` timestamp field, but this is a
+  documented assumption, not a fact — verify it the first time a sync
+  pass's `since` cursor is checked against real multi-page traffic.
+- **Deletions (`deleted: true` tombstones) are logged and skipped, not
+  applied.** `Song` has no "retired" state to sync a tombstone into — adding
+  one is its own small increment (domain method + repository query +
+  possibly a DB column), not a side effect of this transport rewrite.
+- **SongSet is untouched.** The `type` value SongbookPro uses for sets is
+  still unconfirmed (same open question as before this rewrite) — capture
+  real Sets-page traffic before touching `SongSetGraphQLMapper`/
+  `SongSetSource`. They still reference the old, incorrect `songSets`
+  connection query and will fail against the real endpoint exactly as
+  before.
 
 ## 7. Presentation Engine (planned, see roadmap)
 
@@ -497,9 +562,11 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
 
 - ✅ Project scaffolding: composer/npm, Docker, Makefile, CI, PHPStan/CS config
 - ✅ Song module: Domain entities/value objects, repository interface +
-  Doctrine implementation, DTOs, sync Command/Handler, SongbookPro GraphQL
-  client (pagination/retry/ETag/rate-limit), REST endpoints, migration,
-  Inertia/Vue list page, unit + integration tests
+  Doctrine implementation, DTOs, sync Command/Handler, REST endpoints,
+  migration, Inertia/Vue list page, unit + integration tests. SongbookPro
+  GraphQL client rewritten against the real API (delta sync via
+  `DeltaFetcher`/retry/rate-limit, no ETag layer — see §6.4); synced songs
+  have no sections yet, pending a confirmed content payload shape.
 - ✅ SongSet module: Domain entities/value objects (`SongSet`, `SongSetItem`,
   merge-on-sync with local reorder preservation), repository interface +
   Doctrine implementation, DTOs, sync Command/Handler, reorder Command/
@@ -721,20 +788,26 @@ run" looks like. If a future increment hits a wall that "should just
 work" per the SDD, check whether that code path has actually been
 exercised yet before assuming the increment you're adding is at fault.
 
-### 16.8a §6 was rewritten against the real SongbookPro Groups API — the existing sync code was not
+### 16.8a §6 was rewritten against the real SongbookPro Groups API — the sync code has caught up on the Song side only
 
 §6/§6.1–§6.3 were rewritten to describe the actual GraphQL API (endpoint,
 auth, operations, data model), reverse-engineered from live traffic
 against a real logged-in session — not from documentation, since none is
 public and introspection is disabled in production. This replaced an
 earlier, never-tested assumption of cursor-paginated `songs`/`songSets`
-queries. The *code* has not been updated to match: the existing
-`SongGraphQLMapper`, `SongSetGraphQLMapper`, and `PaginatedFetcher` were
-built against that old assumption and have never been run against the
-real endpoint (§16.7 explains why: no increment to date exercised it
-beyond fakes). Read §6.3 before touching any of them — they need
-rewriting against the real `dataItems`/`addDataItems` delta-sync shape in
-§6.2, not extended as if they already matched it.
+queries.
+
+As of the §6.4 rewrite, the *Song*-side code has caught up:
+`SongbookProGraphQLClient`, `DeltaFetcher`, `SongGraphQLMapper`, and
+`SongSource` now target the real `dataItems`/`addDataItems` delta-sync
+shape — the old `ETagCache` (no such layer exists on the real API) was
+deleted outright rather than left dead. The *SongSet*-side code
+(`SongSetGraphQLMapper`, `SongSetSource`) is still built against the old,
+incorrect `songSets` connection assumption and will still fail against the
+real endpoint — its blocker (the unconfirmed `type` value SongbookPro uses
+for sets) wasn't resolved by this rewrite. Read §6.3/§6.4 before touching
+it — capture real Sets-page traffic first, don't extend it as if it
+already matched §6.2's shape.
 
 ### 16.8 What to update alongside a new module
 
