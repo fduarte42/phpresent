@@ -13,6 +13,14 @@ use Phpresent\Identity\Presentation\Http\Handler\ListRolesHandler;
 use Phpresent\Identity\Presentation\Http\Handler\ListUsersHandler;
 use Phpresent\Identity\Presentation\Http\Handler\LoginHandler;
 use Phpresent\Identity\Presentation\Http\Handler\LogoutHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\CreateDisplayHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\DeleteDisplayHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\GetDisplayHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\GetPresentationSessionHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\ListDisplaysHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\LoadSongIntoPresentationHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\UpdateDisplayHandler;
 use Phpresent\Song\Presentation\Http\Handler\GetSongHandler;
 use Phpresent\Song\Presentation\Http\Handler\ListSongsHandler;
 use Phpresent\Song\Presentation\Http\Handler\SongsIndexPageHandler;
@@ -51,4 +59,14 @@ return function (Application $app, MiddlewareFactory $factory, ContainerInterfac
 
     $app->get('/api/roles', ListRolesHandler::class, 'api.roles.list');
     $app->post('/api/roles', CreateRoleHandler::class, 'api.roles.create');
+
+    $app->get('/api/displays', ListDisplaysHandler::class, 'api.displays.list');
+    $app->get('/api/displays/{id}', GetDisplayHandler::class, 'api.displays.get');
+    $app->post('/api/displays', CreateDisplayHandler::class, 'api.displays.create');
+    $app->patch('/api/displays/{id}', UpdateDisplayHandler::class, 'api.displays.update');
+    $app->delete('/api/displays/{id}', DeleteDisplayHandler::class, 'api.displays.delete');
+
+    $app->get('/api/presentation', GetPresentationSessionHandler::class, 'api.presentation.get');
+    $app->post('/api/presentation/load', LoadSongIntoPresentationHandler::class, 'api.presentation.load');
+    $app->post('/api/presentation/control', PresentationControlHandler::class, 'api.presentation.control');
 };

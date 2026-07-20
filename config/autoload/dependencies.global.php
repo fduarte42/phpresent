@@ -19,6 +19,18 @@ use Phpresent\Identity\Infrastructure\Security\CompositeAuthenticator;
 use Phpresent\Identity\Infrastructure\Security\JwtAuthenticator;
 use Phpresent\Identity\Infrastructure\Security\PhpPasswordHasher;
 use Phpresent\Identity\Infrastructure\Security\RolePermissionChecker;
+use Phpresent\Presentation\Domain\Repository\DisplayRepositoryInterface;
+use Phpresent\Presentation\Domain\Repository\PresentationSessionRepositoryInterface;
+use Phpresent\Presentation\Infrastructure\Persistence\DoctrineDisplayRepository;
+use Phpresent\Presentation\Infrastructure\Persistence\DoctrinePresentationSessionRepository;
+use Phpresent\Presentation\Presentation\Http\Handler\CreateDisplayHandler as CreateDisplayHttpHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\DeleteDisplayHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\GetDisplayHandler as GetDisplayHttpHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\GetPresentationSessionHandler as GetPresentationSessionHttpHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\ListDisplaysHandler as ListDisplaysHttpHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\LoadSongIntoPresentationHandler as LoadSongIntoPresentationHttpHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\PresentationControlHandler;
+use Phpresent\Presentation\Presentation\Http\Handler\UpdateDisplayHandler as UpdateDisplayHttpHandler;
 use Phpresent\Shared\Domain\Audit\AuditLoggerInterface;
 use Phpresent\Shared\Domain\Repository\SyncStateRepositoryInterface;
 use Phpresent\Shared\Domain\Security\PermissionInterface;
@@ -66,6 +78,8 @@ return [
             PermissionInterface::class => RolePermissionChecker::class,
             AuditLoggerInterface::class => DoctrineAuditLogger::class,
             AuthenticatorInterface::class => CompositeAuthenticator::class,
+            DisplayRepositoryInterface::class => DoctrineDisplayRepository::class,
+            PresentationSessionRepositoryInterface::class => DoctrinePresentationSessionRepository::class,
         ],
         'factories' => [
             EntityManager::class => EntityManagerFactory::class,
@@ -183,6 +197,15 @@ return [
             \Phpresent\Identity\Presentation\Http\Handler\DeactivateUserHandler::class => ReflectionBasedAbstractFactory::class,
             \Phpresent\Identity\Presentation\Http\Handler\ListRolesHandler::class => ReflectionBasedAbstractFactory::class,
             \Phpresent\Identity\Presentation\Http\Handler\CreateRoleHandler::class => ReflectionBasedAbstractFactory::class,
+
+            ListDisplaysHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            GetDisplayHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            CreateDisplayHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            UpdateDisplayHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            DeleteDisplayHandler::class => ReflectionBasedAbstractFactory::class,
+            GetPresentationSessionHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            LoadSongIntoPresentationHttpHandler::class => ReflectionBasedAbstractFactory::class,
+            PresentationControlHandler::class => ReflectionBasedAbstractFactory::class,
         ],
         'abstract_factories' => [
             ReflectionBasedAbstractFactory::class,

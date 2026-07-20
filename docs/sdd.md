@@ -50,7 +50,10 @@ Modules identified so far (bounded contexts):
 - **SongbookPro** — the GraphQL integration itself (client, sync engine,
   auth), consumed by Song and SongSet as an infrastructure dependency.
 - **Presentation** (engine) — displays, slides, live control, WebSocket
-  fan-out.
+  fan-out. Note the name collision with the per-module `Presentation/`
+  *layer* directory above: this module's own HTTP handlers therefore live
+  at `src/Presentation/Presentation/Http/Handler/...`, same structure as
+  every other module, just with a module named the same as the layer.
 - **Media** — images/video/audio assets, Flysystem-backed.
 - **Bible** — plugin-based translation providers, search, presentation.
 - **Theme** — theme engine (global / song / section scoped).
@@ -421,24 +424,192 @@ re-derive it:
   connection query and will fail against the real endpoint exactly as
   before.
 
-## 7. Presentation Engine (planned, see roadmap)
+## 7. Presentation Engine (fourth increment — Domain/Application/REST only)
 
-- Display registry: unlimited `Display` records, each with a `role`
-  (main | operator | confidence-monitor | audience | custom) and its own
-  `DisplaySettings` (theme, safe area, font, lower-third, watermark, etc).
-- Displays connect over WebSocket (Ratchet/ReactPHP server, separate process
-  from the Mezzio HTTP app) to a `PresentationChannel`; state changes
-  (`SlideChanged`, `DisplayBlanked`, `EmergencyMessageShown`, …) are pushed,
-  never polled. SSE endpoint (`/presentation/{displayId}/events`) mirrors the
-  same event stream for clients that can't hold a WebSocket.
-- Slide generation is a pure `SlideComposer` pipeline: Song/Set/Bible/Media
-  content → `SlideDeck` (ordered `Slide[]`), applying pagination rules
-  (max lines, max chars, smart wrap, split-on-section-boundary-first) as a
-  deterministic, independently unit-testable function of (content, rules).
-- Live control commands (`Next`, `Previous`, `JumpToSlide`, `Black`, `Freeze`,
-  `HideLyrics`, `FontSizeAdjust`, `EmergencyMessage`, …) are Commands against
-  a `PresentationSession` aggregate, broadcast to displays after the command
-  handler commits — control and rendering stay decoupled.
+This increment implements the Display registry, `SlideComposer` pipeline,
+and `PresentationSession` live-control commands described below, all the way
+through Doctrine persistence and a REST API — but **not** the WebSocket
+server, SSE fallback, or any Vue/Inertia UI. Those need a running process
+and a browser to verify (§16.7's lesson: infra wired but never exercised is
+exactly how latent bugs got in), so they're deliberately deferred to a
+follow-up increment rather than built and merely unit-tested. `GET
+/api/presentation` (§7.4) is the interim way to observe session state.
+
+### 7.1 Domain Model
+
+```
+Display (aggregate root)
+ ├─ id: DisplayId (UUIDv4)
+ ├─ name: string
+ ├─ role: DisplayRole (Main|Operator|ConfidenceMonitor|Audience|Custom)
+ ├─ settings: DisplaySettings (theme, safeAreaPercent, fontScale,
+ │                             showLowerThird, watermarkText)
+ ├─ createdAt: DateTimeImmutable
+ └─ updatedAt: DateTimeImmutable
+
+PresentationSession (aggregate root — one row per install, see below)
+ ├─ id: PresentationSessionId (UUIDv4)
+ ├─ currentDeck: ?SlideDeck
+ ├─ currentSlideIndex: int
+ ├─ isBlanked: bool
+ ├─ isFrozen: bool
+ ├─ lyricsHidden: bool
+ ├─ fontSizeAdjust: int
+ ├─ emergencyMessage: ?string
+ └─ updatedAt: DateTimeImmutable
+
+SlideDeck (value object)
+ ├─ sourceType: SlideSourceType (Song|Blank — see 7.2)
+ ├─ sourceId: ?string
+ └─ slides: Slide[]
+
+Slide (value object)
+ ├─ lines: string[]
+ ├─ sectionType: ?string   // plain string, NOT Song\Domain\ValueObject\SectionType — see below
+ └─ sectionLabel: ?string
+```
+
+Design decisions:
+
+- **`PresentationSession` is a normal aggregate, not a config singleton.**
+  There is exactly one row in practice — the one live-output pipeline this
+  install controls — created on first access by
+  `PresentationSessionRepositoryInterface::current()`. Modeling it as an
+  aggregate (rather than e.g. stashing state in `config/`) keeps it testable
+  like everything else in this codebase; `current()` is the only lookup
+  method the interface exposes (no `get(id)`), since nothing else needs one.
+- **`Slide::sectionType` is a plain string, not `Song\Domain\ValueObject\
+  SectionType`.** Referencing another module's Domain enum from
+  Presentation's own Domain VO would be exactly the cross-module Domain
+  coupling §17.1 forbids (the same reason `SongSetItem::songExternalId` is a
+  plain string instead of a `Song` reference). `SlideComposer` (Application
+  layer, where cross-module Domain dependencies are fine — see 7.2) converts
+  `SectionType::value` to a string when building a `Slide`.
+- **`SlideDeck`/`Slide` serialize to JSON** (`toArray()`/`fromArray()`) for
+  storage on `PresentationSession.current_deck` — same passthrough-JSON
+  pattern already used for `Song::metadata`/`Display::settings`, not a new
+  persistence mechanism.
+- **`SectionRenderer` moved from being just a signature in §4 to actually
+  existing, in `Song\Domain\Service`** (not Presentation's Domain) — it only
+  touches `SongSection`, a single-module concern (chord-bracket stripping
+  per format), so it belongs to Song. It intentionally does *not* take
+  `RenderOptions` (pagination — max lines, max chars, split-on-section-
+  boundary-first) as §4 originally sketched; pagination is a display
+  concern, not a song-content concern, so `RenderOptions` lives in
+  `Presentation\Domain\ValueObject` and is applied by `SlideComposer`
+  instead. This is a deliberate refinement of §4's original (never-built)
+  signature for a cleaner module boundary, recorded here per this project's
+  own "living document" convention.
+- **`SlideSourceType` only has `Song` and `Blank` cases today.** SongSet/
+  Bible/Media are listed in §2's eventual module scope but have no
+  composition pipeline yet — adding those enum cases now would be dead code
+  (YAGNI, same reasoning as §18.1's Role↔User join-table deferral).
+
+### 7.2 Application Layer
+
+- `SlideComposer::compose(Song $song, RenderOptions $options = new
+  RenderOptions()): SlideDeck` — pure function, no I/O. For each of the
+  song's sections (already ordered, §4): calls `SectionRenderer::render()`
+  for chord-free lines, word-wraps each line to `maxCharsPerLine`
+  (PHP `wordwrap()`), then chunks the wrapped lines into slides of at most
+  `maxLinesPerSlide` — chunking happens per-section *before* concatenating
+  across sections, which is what guarantees "split-on-section-boundary-
+  first" (two sections' content can never end up sharing one slide, no
+  matter how short both are). Fully blank chunks are dropped.
+  Depending on `Song\Domain\Entity\Song` from this Application layer mirrors
+  the existing precedent of `SongSet\Application\Query\GetSongSetHandler`
+  depending on `Song\Domain\Repository\SongRepositoryInterface` — see 7.1.
+- `CreateDisplayCommand`/`UpdateDisplayCommand`/`RemoveDisplayCommand` +
+  Handlers, `ListDisplaysQuery`/`GetDisplayQuery` + Handlers — plain CRUD,
+  same shape as every other module's Command/Query split (§5). `role` is
+  passed as a string and parsed via `DisplayRole::from()` inside the
+  handler; an unknown value throws PHP's native `ValueError`, caught at the
+  REST boundary (7.4) rather than wrapped in a bespoke domain exception —
+  there's no other validation nuance `DisplayRole::from()` doesn't already
+  provide.
+- Live control: `LoadSongIntoPresentationCommand(songId)`,
+  `NextSlideCommand`, `PreviousSlideCommand`, `JumpToSlideCommand(index)`,
+  `SetBlankedCommand(blanked)`, `SetFrozenCommand(frozen)`,
+  `SetLyricsHiddenCommand(hidden)`, `SetFontSizeAdjustCommand(steps)`,
+  `SetEmergencyMessageCommand(message)` — one Command/Handler pair per SDD
+  §7's original command list, each: load `PresentationSessionRepositoryInterface::current()`,
+  call the one matching `PresentationSession` method, save, return
+  `PresentationSessionDto`. `LoadSongIntoPresentationHandler` additionally
+  resolves the `Song` via `SongRepositoryInterface` and calls
+  `SlideComposer`, returning `null` for an unknown song id (same
+  not-found convention as `GetSongHandler`, §10).
+- `GetPresentationSessionQuery` + Handler — returns the current session
+  state, unconditionally (there's always exactly one, per 7.1).
+- **No `PermissionInterface` gating on any of this**, matching the Song/
+  SongSet precedent (§6/§17) rather than Identity's (§18.2): authorization
+  is left to route-level auth middleware, not implemented in the handler.
+  Identity is so far the only module that actually gates through
+  `PermissionInterface` — extending that project-wide is its own future
+  increment, not a side effect of this one.
+- DTOs: `DisplayDto`, `PresentationSessionDto`, `SlideDeckDto`, `SlideDto` —
+  the only shapes crossing into Presentation(HTTP), same rule as §5.
+
+### 7.3 Database Schema
+
+```sql
+CREATE TABLE displays (
+    id                CHAR(36) PRIMARY KEY,
+    name              VARCHAR(191) NOT NULL,
+    role              VARCHAR(24) NOT NULL,
+    settings          TEXT NOT NULL,             -- JSON object
+    created_at        DATETIME NOT NULL,
+    updated_at        DATETIME NOT NULL
+);
+
+CREATE TABLE presentation_sessions (
+    id                   CHAR(36) PRIMARY KEY,
+    current_deck         TEXT,                   -- JSON object, nullable
+    current_slide_index  INTEGER NOT NULL DEFAULT 0,
+    is_blanked           BOOLEAN NOT NULL DEFAULT 0,
+    is_frozen            BOOLEAN NOT NULL DEFAULT 0,
+    lyrics_hidden        BOOLEAN NOT NULL DEFAULT 0,
+    font_size_adjust     INTEGER NOT NULL DEFAULT 0,
+    emergency_message    TEXT,
+    updated_at           DATETIME NOT NULL
+);
+```
+
+No `sync_state` involvement — neither table is SongbookPro-synced content.
+
+### 7.4 REST API
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/displays` | list all displays |
+| GET | `/api/displays/{id}` | get one display |
+| POST | `/api/displays` | create a display (`{name, role, settings?}`) |
+| PATCH | `/api/displays/{id}` | update a display |
+| DELETE | `/api/displays/{id}` | remove a display |
+| GET | `/api/presentation` | current session state |
+| POST | `/api/presentation/load` | load a song (`{songId}`) as the current deck |
+| POST | `/api/presentation/control` | dispatch a live-control command — see below |
+
+`POST /api/presentation/control` takes `{action, value?}` where `action` is
+one of `next` \| `previous` \| `jump` (`value`: int) \| `blank` (`value`:
+bool) \| `freeze` (`value`: bool) \| `hideLyrics` (`value`: bool) \|
+`fontSize` (`value`: int) \| `emergencyMessage` (`value`: `?string`). This
+is one route for all eight live-control commands rather than eight routes —
+each remains its own independently unit-tested Command/Handler in the
+Application layer (7.2); only the *HTTP routing* surface is collapsed,
+since CQRS doesn't require a 1:1 route-to-command mapping and eight
+three-line HTTP handler classes would add files without adding behavior.
+Same JSON/RFC 7807 conventions as §10.
+
+### 7.5 Deferred to a follow-up increment
+
+- WebSocket server (`bin/websocket-server.php`, Ratchet) and the SSE
+  fallback endpoint (`/presentation/{displayId}/events`) — displays
+  currently have no way to receive push updates; polling `GET
+  /api/presentation` is the only option until that increment.
+- Vue/Inertia UI (display management, live-control operator screen) — no
+  admin UI exists yet for the same reason Identity's doesn't (§15): there's
+  more to build (WebSocket push, in particular) before an operator screen is
+  worth building.
 
 ## 8. Cross-Cutting Concerns
 
@@ -586,8 +757,15 @@ Legend: ✅ implemented this increment · ⏳ designed, not yet built
   promoted to `Shared\Domain` for cross-module reuse, REST endpoints incl.
   login/logout, migration, unit + integration tests. No admin UI yet
   (tracked separately below).
-- ⏳ Presentation engine (displays, slide composer, live control, WebSocket
-  server, SSE fallback)
+- ✅ Presentation module (Domain/Application/REST only — see §7): `Display`
+  registry, `SlideComposer` (Song → `SlideDeck`, chord-stripping +
+  word-wrap + section-boundary-first pagination), `PresentationSession`
+  live-control commands (Load/Next/Previous/JumpToSlide/Blank/Freeze/
+  HideLyrics/FontSizeAdjust/EmergencyMessage), REST endpoints, migration,
+  unit + integration tests. Also added `Song\Domain\Service\SectionRenderer`
+  (chord-free content extraction) to the Song module as a prerequisite.
+  ⏳ WebSocket server, SSE fallback, and the Vue/Inertia UI are deferred to
+  a follow-up increment — see §7.5.
 - ⏳ Media module (Flysystem-backed assets, video/image/PDF slides)
 - ⏳ Theme engine
 - ⏳ Bible module + provider plugin(s)
